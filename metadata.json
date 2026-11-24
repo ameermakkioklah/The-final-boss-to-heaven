@@ -1,0 +1,6 @@
+{
+  "name": "Warrior vs Dragon — 2D Pixel RPG",
+  "description": "A crisp 2D pixel-art turn-based battle game built from the Warrior vs Dragon C++ combat loop.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
