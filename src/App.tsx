@@ -187,15 +187,15 @@ const COPY = {
 function WarriorPixelIcon() {
   return (
     <svg viewBox="0 0 16 16" className="w-5 h-5 pixelated shrink-0" aria-hidden="true">
-      <rect x="5" y="1" width="6" height="3" fill="#f8fafc" />
-      <rect x="4" y="2" width="2" height="3" fill="#cbd5e1" />
-      <rect x="5" y="4" width="6" height="3" fill="#f4c29f" />
-      <rect x="6" y="5" width="1" height="1" fill="#0e0b14" />
-      <rect x="9" y="5" width="1" height="1" fill="#0e0b14" />
-      <rect x="4" y="7" width="8" height="3" fill="#f8fafc" />
-      <rect x="3" y="9" width="3" height="5" fill="#4a8b8c" />
-      <rect x="5" y="10" width="6" height="4" fill="#8b5a3c" />
-      <rect x="7" y="11" width="2" height="1" fill="#f5b942" />
+      <rect x="5" y="1" width="6" height="3" fill="#fff4d6" />
+      <rect x="4" y="2" width="2" height="3" fill="#b4bfe0" />
+      <rect x="5" y="4" width="6" height="3" fill="#ffd2ab" />
+      <rect x="6" y="5" width="1" height="1" fill="#1b102b" />
+      <rect x="9" y="5" width="1" height="1" fill="#1b102b" />
+      <rect x="4" y="7" width="8" height="3" fill="#fff4d6" />
+      <rect x="3" y="9" width="3" height="5" fill="#4ba39f" />
+      <rect x="5" y="10" width="6" height="4" fill="#a86c43" />
+      <rect x="7" y="11" width="2" height="1" fill="#ffd25a" />
     </svg>
   );
 }
@@ -203,16 +203,16 @@ function WarriorPixelIcon() {
 function DragonPixelIcon({ phase2 = false }: { phase2?: boolean }) {
   return (
     <svg viewBox="0 0 16 16" className="w-5 h-5 pixelated shrink-0" aria-hidden="true">
-      <rect x="2" y="1" width="2" height="4" fill={phase2 ? '#1a0a0d' : '#4b225e'} />
-      <rect x="12" y="1" width="2" height="4" fill={phase2 ? '#1a0a0d' : '#4b225e'} />
-      <rect x="3" y="4" width="10" height="6" fill={phase2 ? '#991b1b' : '#faf2e4'} />
-      <rect x="4" y="5" width="2" height="1" fill={phase2 ? '#f59e0b' : '#7c3aed'} />
-      <rect x="10" y="5" width="2" height="1" fill={phase2 ? '#f59e0b' : '#7c3aed'} />
-      <rect x="5" y="6" width="2" height="2" fill={phase2 ? '#fde047' : '#66f2ff'} />
-      <rect x="9" y="6" width="2" height="2" fill={phase2 ? '#fde047' : '#66f2ff'} />
-      <rect x="4" y="10" width="8" height="4" fill={phase2 ? '#5c1414' : '#e6d6c3'} />
-      <rect x="6" y="11" width="4" height="3" fill={phase2 ? '#fb923c' : '#66f2ff'} />
-      <rect x="7" y="11" width="2" height="2" fill="#ffffff" />
+      <rect x="2" y="1" width="2" height="4" fill={phase2 ? '#1d0b24' : '#32154f'} />
+      <rect x="12" y="1" width="2" height="4" fill={phase2 ? '#1d0b24' : '#32154f'} />
+      <rect x="3" y="4" width="10" height="6" fill={phase2 ? '#cf2144' : '#fff1d4'} />
+      <rect x="4" y="5" width="2" height="1" fill={phase2 ? '#ff9e3b' : '#8a4cf0'} />
+      <rect x="10" y="5" width="2" height="1" fill={phase2 ? '#ff9e3b' : '#8a4cf0'} />
+      <rect x="5" y="6" width="2" height="2" fill={phase2 ? '#fff08a' : '#75f5ff'} />
+      <rect x="9" y="6" width="2" height="2" fill={phase2 ? '#fff08a' : '#75f5ff'} />
+      <rect x="4" y="10" width="8" height="4" fill={phase2 ? '#632036' : '#d4bfd1'} />
+      <rect x="6" y="11" width="4" height="3" fill={phase2 ? '#ff7b24' : '#75f5ff'} />
+      <rect x="7" y="11" width="2" height="2" fill="#fff7d6" />
     </svg>
   );
 }

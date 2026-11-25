@@ -7,22 +7,22 @@ export interface SpriteSheet {
 
 const WARRIOR_PALETTE: Record<string, string> = {
   '.': '',
-  'K': '#0e0b14',
-  'W': '#f8fafc',
-  'w': '#cbd5e1',
-  'P': '#f4c29f',
-  'p': '#d99b78',
-  'T': '#4a8b8c',
-  't': '#2f6266',
-  'B': '#8b5a3c',
-  'b': '#5c3824',
-  'R': '#6e2629',
-  'r': '#47161a',
-  'G': '#f5b942',
-  'S': '#d4dde8',
-  's': '#8b9bb4',
-  'C': '#68e3ff',
-  'c': '#2dd4bf',
+  'K': '#1b102b', // deep indigo-violet outline (never pure black)
+  'W': '#fff4d6', // warm cream-white hair & beard highlight
+  'w': '#b4bfe0', // cool lavender-periwinkle hair shadow
+  'P': '#ffd2ab', // warm golden-peach skin highlight
+  'p': '#c77f88', // cool plum-rose skin shadow
+  'T': '#4ba39f', // vibrant teal-cyan cloak highlight
+  't': '#295370', // cool deep slate-blue cloak shadow
+  'B': '#a86c43', // warm ochre-leather tunic highlight
+  'b': '#572f3d', // cool plum-brown leather shadow
+  'R': '#8f323d', // warm crimson boot highlight
+  'r': '#451b38', // cool indigo-burgundy boot shadow
+  'G': '#ffd25a', // warm gold belt buckle
+  'S': '#f5eed6', // warm ivory-silver steel
+  's': '#7d8db8', // cool periwinkle steel shadow
+  'C': '#6ef2ff', // bright cyan crystal
+  'c': '#28b5b5', // deep teal-cyan crystal midtone
 };
 
 const WARRIOR_IDLE_0 = [
@@ -447,17 +447,17 @@ const WARRIOR_CRYSTAL_1 = [
 
 const WEAPON_PALETTE: Record<string, string> = {
   '.': '',
-  'K': '#0e0b14',
-  'S': '#f1f5f9',
-  's': '#94a3b8',
-  'd': '#475569',
-  'G': '#f5b942',
-  'L': '#6b3e26',
-  'T': '#4a8b8c',
-  'B': '#8b5a3c',
-  'C': '#66f2ff',
-  'E': '#34d399',
-  'P': '#7c3aed',
+  'K': '#1b102b', // deep indigo-violet outline
+  'S': '#fff2d6', // warm ivory-steel edge highlight
+  's': '#8f9ec9', // cool periwinkle steel midtone
+  'd': '#444b78', // cool indigo steel shadow
+  'G': '#ffd059', // warm gold crossguard
+  'L': '#753d44', // plum-mahogany grip
+  'T': '#4ba39f',
+  'B': '#a86c43',
+  'C': '#6ef2ff',
+  'E': '#3ee09e',
+  'P': '#8a4cf0',
 };
 
 const WEAPON_BROADSWORD = [
@@ -610,52 +610,52 @@ const WEAPON_SHIELD = [
 // =========================================================================
 const WYVERN_PALETTE: Record<string, string> = {
   '.': '',
-  'K': '#1F0F26', // crisp dark plum-purple outline
-  'I': '#FAF2E4', // heavy armor plate highlight
-  'i': '#D8C4B2', // armored scale midtone
-  's': '#A9928E', // thick underbelly plate shadow
-  'L': '#8F76B2', // heavy layered armor ridge
-  'l': '#5D467C', // deep armor plate seam
-  'H': '#4F2166', // thick plum-violet horns & claws
-  'h': '#2B1038', // dark purple-black horn/claw shadow
-  'V': '#683282', // heavy violet wing-bone highlight
-  'v': '#3A194A', // dark violet wing-bone shadow
-  'M': '#C99A6B', // weathered bronze-tan parchment wing
-  'm': '#996D48', // bronze membrane midtone
-  'n': '#6E4A34', // bronze membrane dark fold
-  'C': '#66F2FF', // glowing cyan-blue eye / crystal
-  'c': '#12B5E8', // cobalt-cyan crystal midtone
-  'B': '#1E46B8', // deep cobalt facet shadow
-  'E': '#3B82F6', // electric-blue temple marking
-  'P': '#7C3AED', // sharp violet temple marking
-  'W': '#FFFFFF', // crisp crystal highlight
-  'T': '#8B5A44', // jagged bronze-violet tail tip
-  't': '#542A5E', // tail tip shadow
+  'K': '#1e1033', // crisp deep indigo-violet outline
+  'I': '#fff1d4', // warm cream-gold armor plate highlight
+  'i': '#d4bfd1', // lavender-ivory armored scale midtone
+  's': '#8d7ca8', // cool indigo-violet underbelly shadow
+  'L': '#7e69b8', // violet layered armor ridge
+  'l': '#4a3575', // deep indigo armor plate seam
+  'H': '#632985', // plum-violet horns & claws
+  'h': '#32154f', // deep indigo horn/claw shadow
+  'V': '#753999', // violet wing-bone highlight
+  'v': '#3e1b5c', // deep indigo wing-bone shadow
+  'M': '#e0ab6c', // warm gold-bronze parchment wing
+  'm': '#9e6e5c', // muted bronze-plum midtone
+  'n': '#5e3d4f', // cool plum membrane dark fold
+  'C': '#75f5ff', // glowing cyan-blue eye / crystal
+  'c': '#1fb5e8', // cobalt-cyan crystal midtone
+  'B': '#2c41a8', // deep indigo-cobalt facet shadow
+  'E': '#4c88ff', // electric-blue temple marking
+  'P': '#8a4cf0', // sharp violet temple marking
+  'W': '#fff7d6', // warm cream-gold crystal glint (never pure white)
+  'T': '#9e6357', // jagged bronze-violet tail tip
+  't': '#4e275c', // cool violet tail tip shadow
 };
 
 const INFERNAL_PALETTE: Record<string, string> = {
   '.': '',
-  'K': '#120508', // charred obsidian outline
-  'I': '#4A1418', // obsidian-charred armored plate
-  'i': '#2E0B10', // volcanic iron scale midtone
-  's': '#1D070B', // deep charred underbelly armor
-  'L': '#FB923C', // glowing magma crack veins!
-  'l': '#DC2626', // molten crimson armor seam
-  'H': '#FACC15', // blazing fiery horns & talons
-  'h': '#EA580C', // molten bronze-orange horn base
-  'V': '#5C1B0C', // charred wing-bone
-  'v': '#2E0A05', // obsidian wing-bone shadow
-  'M': '#EA580C', // ember-filled tattered wing membrane
-  'm': '#9A3412', // smoldering wing midtone
-  'n': '#431407', // charred torn wing edge
-  'C': '#FEF08A', // blazing molten solar core / eye
-  'c': '#F97316', // bright fire-orange crystal
-  'B': '#DC2626', // deep magma facet
-  'E': '#FB923C', // fiery orange temple marking
-  'P': '#EF4444', // glowing red temple marking
-  'W': '#FFFFFF', // white-hot furnace glint
-  'T': '#EA580C', // blazing magma tail tip
-  't': '#7F1D1D', // scorched tail tip shadow
+  'K': '#1d0b24', // deep plum-obsidian outline
+  'I': '#632036', // warm crimson-plum armored plate
+  'i': '#3d1533', // indigo-plum iron midtone
+  's': '#250d2b', // deep violet-obsidian underbelly shadow
+  'L': '#ff9e3b', // glowing amber magma crack veins
+  'l': '#d9264e', // molten crimson-magenta seam
+  'H': '#ffe066', // blazing warm-gold horns & talons
+  'h': '#e85a1a', // molten bronze-orange horn base
+  'V': '#6e2428', // charred crimson-plum wing-bone
+  'v': '#361124', // deep plum wing-bone shadow
+  'M': '#f26a21', // ember-filled tattered wing membrane
+  'm': '#a33232', // smoldering crimson-plum midtone
+  'n': '#4a172b', // charred plum torn wing edge
+  'C': '#fff08a', // blazing solar gold core / eye
+  'c': '#ff7b24', // bright fire-orange crystal
+  'B': '#cf2144', // deep crimson-magenta facet
+  'E': '#ff9e3b', // fiery amber temple marking
+  'P': '#f03e52', // glowing crimson temple marking
+  'W': '#fff8d6', // warm solar-cream glint (never pure white)
+  'T': '#f26a21', // blazing magma tail tip
+  't': '#6e1b33', // scorched plum tail tip shadow
 };
 
 const WYVERN_WING_UP = [
@@ -1012,7 +1012,16 @@ const WYVERN_DEFEATED = [
   '................................................................................',
 ];
 
-function buildSpriteSheet(rows: string[], palette: Record<string, string>): SpriteSheet {
+interface RimConfig {
+  color: string;
+  chars: Set<string>;
+}
+
+function buildSpriteSheet(
+  rows: string[],
+  palette: Record<string, string>,
+  rim?: RimConfig
+): SpriteSheet {
   const height = rows.length;
   const width = rows.reduce((max, r) => Math.max(max, r.length), 0);
 
@@ -1031,11 +1040,20 @@ function buildSpriteSheet(rows: string[], palette: Record<string, string>): Spri
       const row = rows[y];
       for (let x = 0; x < row.length; x++) {
         const ch = row[x];
-        const color = palette[ch];
+        let color = palette[ch];
         if (color) {
+          if (
+            rim &&
+            rim.chars.has(ch) &&
+            y >= 1 &&
+            rows[y - 1][x] === 'K' &&
+            (y < 2 || rows[y - 2][x] === '.' || rows[y - 2][x] === undefined)
+          ) {
+            color = rim.color;
+          }
           ctx.fillStyle = color;
           ctx.fillRect(x, y, 1, 1);
-          fCtx.fillStyle = ch === 'K' ? '#e2f1ff' : '#ffffff';
+          fCtx.fillStyle = ch === 'K' ? '#dceeff' : '#fff7dc';
           fCtx.fillRect(x, y, 1, 1);
         }
       }
@@ -1043,6 +1061,69 @@ function buildSpriteSheet(rows: string[], palette: Record<string, string>): Spri
   }
 
   return { canvas, flashCanvas, width, height };
+}
+
+function rotateRowsNearest(rows: string[], angleRad: number): string[] {
+  const srcH = rows.length;
+  const srcW = rows.reduce((max, r) => Math.max(max, r.length), 0);
+  const size = Math.max(srcW, srcH) + 6;
+  const cx = (srcW - 1) * 0.5;
+  const cy = (srcH - 1) * 0.5;
+  const dstCenter = (size - 1) * 0.5;
+  const cos = Math.cos(-angleRad);
+  const sin = Math.sin(-angleRad);
+
+  const grid: string[][] = Array.from({ length: size }, () => Array(size).fill('.'));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - dstCenter;
+      const dy = y - dstCenter;
+      const sx = Math.round(cx + dx * cos - dy * sin);
+      const sy = Math.round(cy + dx * sin + dy * cos);
+      if (sy >= 0 && sy < srcH && sx >= 0 && sx < rows[sy].length) {
+        grid[y][x] = rows[sy][sx];
+      }
+    }
+  }
+
+  // Ensure crisp continuous 1px dark outline around non-outline rotated weapon pixels
+  const result = grid.map((r) => [...r]);
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const ch = grid[y][x];
+      if (ch !== '.' && ch !== 'K') {
+        const dirs = [
+          [0, -1],
+          [0, 1],
+          [-1, 0],
+          [1, 0],
+        ];
+        for (const [ox, oy] of dirs) {
+          if (grid[y + oy][x + ox] === '.') {
+            result[y + oy][x + ox] = 'K';
+          }
+        }
+      }
+    }
+  }
+
+  return result.map((r) => r.join(''));
+}
+
+export interface WeaponSpriteSet {
+  idle: SpriteSheet;
+  swingDown: SpriteSheet;
+  swingUp: SpriteSheet;
+  thrust: SpriteSheet;
+}
+
+function buildWeaponSet(rows: string[]): WeaponSpriteSet {
+  return {
+    idle: buildSpriteSheet(rows, WEAPON_PALETTE),
+    swingDown: buildSpriteSheet(rotateRowsNearest(rows, 0.78), WEAPON_PALETTE),
+    swingUp: buildSpriteSheet(rotateRowsNearest(rows, -0.45), WEAPON_PALETTE),
+    thrust: buildSpriteSheet(rotateRowsNearest(rows, 1.5708), WEAPON_PALETTE),
+  };
 }
 
 export interface DragonSprites {
@@ -1070,12 +1151,12 @@ export interface GameSprites {
     crystal1: SpriteSheet;
   };
   weapons: {
-    broadsword: SpriteSheet;
-    daggers: SpriteSheet;
-    spear: SpriteSheet;
-    axe: SpriteSheet;
-    katana: SpriteSheet;
-    mace: SpriteSheet;
+    broadsword: WeaponSpriteSet;
+    daggers: WeaponSpriteSet;
+    spear: WeaponSpriteSet;
+    axe: WeaponSpriteSet;
+    katana: WeaponSpriteSet;
+    mace: WeaponSpriteSet;
     shield: SpriteSheet;
   };
   dragon: DragonSprites;
@@ -1084,47 +1165,62 @@ export interface GameSprites {
 
 let cachedSprites: GameSprites | null = null;
 
+const WARRIOR_RIM: RimConfig = {
+  color: '#fff9e2',
+  chars: new Set(['W', 'T', 'B']),
+};
+
+const WYVERN_RIM: RimConfig = {
+  color: '#fff9e0',
+  chars: new Set(['I', 'i', 'H', 'V', 'L', 'T']),
+};
+
+const INFERNAL_RIM: RimConfig = {
+  color: '#ffd670',
+  chars: new Set(['I', 'i', 'H', 'V', 'L', 'T']),
+};
+
 export function getGameSprites(): GameSprites {
   if (cachedSprites) return cachedSprites;
   cachedSprites = {
     warrior: {
-      idle0: buildSpriteSheet(WARRIOR_IDLE_0, WARRIOR_PALETTE),
-      idle1: buildSpriteSheet(WARRIOR_IDLE_1, WARRIOR_PALETTE),
-      run0: buildSpriteSheet(WARRIOR_RUN_0, WARRIOR_PALETTE),
-      run1: buildSpriteSheet(WARRIOR_RUN_1, WARRIOR_PALETTE),
-      run2: buildSpriteSheet(WARRIOR_RUN_2, WARRIOR_PALETTE),
-      roll0: buildSpriteSheet(WARRIOR_ROLL_0, WARRIOR_PALETTE),
-      roll1: buildSpriteSheet(WARRIOR_ROLL_1, WARRIOR_PALETTE),
-      jump: buildSpriteSheet(WARRIOR_JUMP, WARRIOR_PALETTE),
-      attack: buildSpriteSheet(WARRIOR_ATTACK, WARRIOR_PALETTE),
-      hurt: buildSpriteSheet(WARRIOR_HURT, WARRIOR_PALETTE),
+      idle0: buildSpriteSheet(WARRIOR_IDLE_0, WARRIOR_PALETTE, WARRIOR_RIM),
+      idle1: buildSpriteSheet(WARRIOR_IDLE_1, WARRIOR_PALETTE, WARRIOR_RIM),
+      run0: buildSpriteSheet(WARRIOR_RUN_0, WARRIOR_PALETTE, WARRIOR_RIM),
+      run1: buildSpriteSheet(WARRIOR_RUN_1, WARRIOR_PALETTE, WARRIOR_RIM),
+      run2: buildSpriteSheet(WARRIOR_RUN_2, WARRIOR_PALETTE, WARRIOR_RIM),
+      roll0: buildSpriteSheet(WARRIOR_ROLL_0, WARRIOR_PALETTE, WARRIOR_RIM),
+      roll1: buildSpriteSheet(WARRIOR_ROLL_1, WARRIOR_PALETTE, WARRIOR_RIM),
+      jump: buildSpriteSheet(WARRIOR_JUMP, WARRIOR_PALETTE, WARRIOR_RIM),
+      attack: buildSpriteSheet(WARRIOR_ATTACK, WARRIOR_PALETTE, WARRIOR_RIM),
+      hurt: buildSpriteSheet(WARRIOR_HURT, WARRIOR_PALETTE, WARRIOR_RIM),
       crystal0: buildSpriteSheet(WARRIOR_CRYSTAL_0, WARRIOR_PALETTE),
       crystal1: buildSpriteSheet(WARRIOR_CRYSTAL_1, WARRIOR_PALETTE),
     },
     weapons: {
-      broadsword: buildSpriteSheet(WEAPON_BROADSWORD, WEAPON_PALETTE),
-      daggers: buildSpriteSheet(WEAPON_DAGGERS, WEAPON_PALETTE),
-      spear: buildSpriteSheet(WEAPON_SPEAR, WEAPON_PALETTE),
-      axe: buildSpriteSheet(WEAPON_AXE, WEAPON_PALETTE),
-      katana: buildSpriteSheet(WEAPON_KATANA, WEAPON_PALETTE),
-      mace: buildSpriteSheet(WEAPON_MACE, WEAPON_PALETTE),
+      broadsword: buildWeaponSet(WEAPON_BROADSWORD),
+      daggers: buildWeaponSet(WEAPON_DAGGERS),
+      spear: buildWeaponSet(WEAPON_SPEAR),
+      axe: buildWeaponSet(WEAPON_AXE),
+      katana: buildWeaponSet(WEAPON_KATANA),
+      mace: buildWeaponSet(WEAPON_MACE),
       shield: buildSpriteSheet(WEAPON_SHIELD, WEAPON_PALETTE),
     },
     dragon: {
-      wingUp: buildSpriteSheet(WYVERN_WING_UP, WYVERN_PALETTE),
-      wingMid: buildSpriteSheet(WYVERN_WING_MID, WYVERN_PALETTE),
-      wingDown: buildSpriteSheet(WYVERN_WING_DOWN, WYVERN_PALETTE),
-      attack: buildSpriteSheet(WYVERN_ATTACK, WYVERN_PALETTE),
-      coil: buildSpriteSheet(WYVERN_COIL, WYVERN_PALETTE),
-      defeated: buildSpriteSheet(WYVERN_DEFEATED, WYVERN_PALETTE),
+      wingUp: buildSpriteSheet(WYVERN_WING_UP, WYVERN_PALETTE, WYVERN_RIM),
+      wingMid: buildSpriteSheet(WYVERN_WING_MID, WYVERN_PALETTE, WYVERN_RIM),
+      wingDown: buildSpriteSheet(WYVERN_WING_DOWN, WYVERN_PALETTE, WYVERN_RIM),
+      attack: buildSpriteSheet(WYVERN_ATTACK, WYVERN_PALETTE, WYVERN_RIM),
+      coil: buildSpriteSheet(WYVERN_COIL, WYVERN_PALETTE, WYVERN_RIM),
+      defeated: buildSpriteSheet(WYVERN_DEFEATED, WYVERN_PALETTE, WYVERN_RIM),
     },
     infernalDragon: {
-      wingUp: buildSpriteSheet(WYVERN_WING_UP, INFERNAL_PALETTE),
-      wingMid: buildSpriteSheet(WYVERN_WING_MID, INFERNAL_PALETTE),
-      wingDown: buildSpriteSheet(WYVERN_WING_DOWN, INFERNAL_PALETTE),
-      attack: buildSpriteSheet(WYVERN_ATTACK, INFERNAL_PALETTE),
-      coil: buildSpriteSheet(WYVERN_COIL, INFERNAL_PALETTE),
-      defeated: buildSpriteSheet(WYVERN_DEFEATED, INFERNAL_PALETTE),
+      wingUp: buildSpriteSheet(WYVERN_WING_UP, INFERNAL_PALETTE, INFERNAL_RIM),
+      wingMid: buildSpriteSheet(WYVERN_WING_MID, INFERNAL_PALETTE, INFERNAL_RIM),
+      wingDown: buildSpriteSheet(WYVERN_WING_DOWN, INFERNAL_PALETTE, INFERNAL_RIM),
+      attack: buildSpriteSheet(WYVERN_ATTACK, INFERNAL_PALETTE, INFERNAL_RIM),
+      coil: buildSpriteSheet(WYVERN_COIL, INFERNAL_PALETTE, INFERNAL_RIM),
+      defeated: buildSpriteSheet(WYVERN_DEFEATED, INFERNAL_PALETTE, INFERNAL_RIM),
     },
   };
   return cachedSprites;

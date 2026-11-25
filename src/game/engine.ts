@@ -1,5 +1,10 @@
 import { sound } from './sound';
-import { getGameSprites, type GameSprites, type SpriteSheet } from './sprites';
+import {
+  getGameSprites,
+  type GameSprites,
+  type SpriteSheet,
+  type WeaponSpriteSet,
+} from './sprites';
 import {
   BATTLE_CONFIG,
   SUPER_SKILL_LIST,
@@ -364,20 +369,38 @@ type WyvernAiState =
   | 'recover'
   | 'defeated';
 
-const PIXEL_GLYPHS: Record<string, string[]> = {
-  '-': ['000', '000', '111', '000', '000'],
-  '+': ['000', '010', '111', '010', '000'],
-  '!': ['010', '010', '010', '000', '010'],
-  '0': ['111', '101', '101', '101', '111'],
-  '1': ['010', '110', '010', '010', '111'],
-  '2': ['111', '001', '111', '100', '111'],
-  '3': ['111', '001', '111', '001', '111'],
-  '4': ['101', '101', '111', '001', '001'],
-  '5': ['111', '100', '111', '001', '111'],
-  '6': ['111', '100', '111', '101', '111'],
-  '7': ['111', '001', '001', '001', '001'],
-  '8': ['111', '101', '111', '101', '111'],
-  '9': ['111', '101', '111', '001', '111'],
+// Crisp 1:1 texel-dense 5x7 bitmap glyphs (zero mixel scaling!)
+const PIXEL_GLYPHS_5X7: Record<string, string[]> = {
+  '-': ['00000', '00000', '00000', '11110', '00000', '00000', '00000'],
+  '+': ['00000', '00100', '00100', '11111', '00100', '00100', '00000'],
+  '!': ['01100', '01100', '01100', '01100', '00000', '01100', '01100'],
+  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
+  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
+  '2': ['01110', '10001', '00001', '00110', '01000', '10000', '11111'],
+  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
+  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
+  '5': ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
+  '6': ['01110', '10000', '11110', '10001', '10001', '10001', '01110'],
+  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
+  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
+  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100'],
+};
+
+// Crisp 1:1 texel-dense 7x9 bold bitmap glyphs for critical hits
+const PIXEL_GLYPHS_7X9: Record<string, string[]> = {
+  '-': ['0000000', '0000000', '0000000', '1111110', '1111110', '0000000', '0000000', '0000000', '0000000'],
+  '+': ['0000000', '0011000', '0011000', '1111110', '1111110', '0011000', '0011000', '0000000', '0000000'],
+  '!': ['0111000', '0111000', '0111000', '0111000', '0111000', '0010000', '0000000', '0111000', '0111000'],
+  '0': ['0111110', '1100011', '1100011', '1100111', '1101011', '1110011', '1100011', '1100011', '0111110'],
+  '1': ['0011000', '0111000', '1111000', '0011000', '0011000', '0011000', '0011000', '0011000', '1111110'],
+  '2': ['0111110', '1100011', '0000011', '0000110', '0011100', '0110000', '1100000', '1100011', '1111111'],
+  '3': ['1111110', '0000011', '0000011', '0011110', '0000011', '0000011', '0000011', '1100011', '0111110'],
+  '4': ['0001100', '0011100', '0111100', '1101100', '1101100', '1111111', '0001100', '0001100', '0001100'],
+  '5': ['1111111', '1100000', '1100000', '1111110', '0000011', '0000011', '0000011', '1100011', '0111110'],
+  '6': ['0111110', '1100000', '1100000', '1111110', '1100011', '1100011', '1100011', '1100011', '0111110'],
+  '7': ['1111111', '1100011', '0000011', '0000110', '0001100', '0011000', '0011000', '0011000', '0011000'],
+  '8': ['0111110', '1100011', '1100011', '0111110', '1100011', '1100011', '1100011', '1100011', '0111110'],
+  '9': ['0111110', '1100011', '1100011', '1100011', '0111111', '0000011', '0000011', '0000110', '0111100'],
 };
 
 interface EngineCallbacks {
@@ -388,6 +411,14 @@ interface EngineCallbacks {
 export class PixelBattleEngine {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  private emissiveCanvas: HTMLCanvasElement;
+  private emissiveCtx: CanvasRenderingContext2D;
+  private bloomMidCanvas: HTMLCanvasElement;
+  private bloomMidCtx: CanvasRenderingContext2D;
+  private bloomCanvas: HTMLCanvasElement;
+  private bloomCtx: CanvasRenderingContext2D;
+  private lutNormal: Uint8Array;
+  private lutInfernal: Uint8Array;
   private sprites: GameSprites;
   private callbacks: EngineCallbacks;
 
@@ -592,18 +623,50 @@ export class PixelBattleEngine {
     this.canvas = canvas;
     this.canvas.width = VIEW_WIDTH;
     this.canvas.height = VIEW_HEIGHT;
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) {
       throw new Error('Could not initialize 2D canvas context');
     }
     this.ctx = context;
     this.ctx.imageSmoothingEnabled = false;
+
+    // Dedicated emissive & restrained optical bloom buffers
+    this.emissiveCanvas = document.createElement('canvas');
+    this.emissiveCanvas.width = VIEW_WIDTH;
+    this.emissiveCanvas.height = VIEW_HEIGHT;
+    const eCtx = this.emissiveCanvas.getContext('2d');
+    if (!eCtx) throw new Error('Could not initialize emissive canvas context');
+    this.emissiveCtx = eCtx;
+    this.emissiveCtx.imageSmoothingEnabled = false;
+
+    this.bloomMidCanvas = document.createElement('canvas');
+    this.bloomMidCanvas.width = 60;
+    this.bloomMidCanvas.height = 34;
+    const bmCtx = this.bloomMidCanvas.getContext('2d');
+    if (!bmCtx) throw new Error('Could not initialize bloom mid canvas context');
+    this.bloomMidCtx = bmCtx;
+    this.bloomMidCtx.imageSmoothingEnabled = true;
+    this.bloomMidCtx.imageSmoothingQuality = 'low';
+
+    this.bloomCanvas = document.createElement('canvas');
+    this.bloomCanvas.width = 120;
+    this.bloomCanvas.height = 68;
+    const bCtx = this.bloomCanvas.getContext('2d');
+    if (!bCtx) throw new Error('Could not initialize bloom canvas context');
+    this.bloomCtx = bCtx;
+    this.bloomCtx.imageSmoothingEnabled = true;
+    this.bloomCtx.imageSmoothingQuality = 'low';
+
+    // Precompute 17x17x17 3D Color Grading LUTs (cool indigo shadows, warm gold/cream highlights)
+    this.lutNormal = this.buildColorGradingLut(false);
+    this.lutInfernal = this.buildColorGradingLut(true);
+
     this.sprites = getGameSprites();
     this.callbacks = callbacks;
 
     this.initCloak();
 
-    const moteColors = ['#c3eaeb', '#8cf274', '#a6d8db', '#f5f5c6'];
+    const moteColors = ['#b7dce2', '#8cf274', '#9bc7d4', '#f5e8ba'];
     for (let i = 0; i < 36; i++) {
       this.forestMotes.push({
         x: Math.random() * WORLD_WIDTH,
@@ -613,6 +676,125 @@ export class PixelBattleEngine {
         color: moteColors[i % moteColors.length],
       });
     }
+  }
+
+  private buildColorGradingLut(infernal: boolean): Uint8Array {
+    const size = 17;
+    const lut = new Uint8Array(size * size * size * 3);
+    const sat = infernal ? 1.1 : 1.07;
+
+    let ptr = 0;
+    for (let bi = 0; bi < size; bi++) {
+      const b0 = bi / 16;
+      for (let gi = 0; gi < size; gi++) {
+        const g0 = gi / 16;
+        for (let ri = 0; ri < size; ri++) {
+          const r0 = ri / 16;
+
+          // Gentle filmic S-curve contrast without crushing shadows or clipping highlights
+          const sr = r0 * 0.84 + r0 * r0 * (3 - 2 * r0) * 0.16;
+          const sg = g0 * 0.84 + g0 * g0 * (3 - 2 * g0) * 0.16;
+          const sb = b0 * 0.84 + b0 * b0 * (3 - 2 * b0) * 0.16;
+
+          const lum = 0.2126 * sr + 0.7152 * sg + 0.0722 * sb;
+          const sw = (1 - lum) * (1 - lum);
+          const hw = lum * lum;
+
+          // Hue-shifted shadow & highlight curves (cool indigo/plum shadows, warm gold/cream highs)
+          let r = sr + (infernal ? 0.015 : -0.014) * sw + (infernal ? 0.042 : 0.028) * hw;
+          let g = sg - 0.022 * sw + (infernal ? 0.014 : 0.018) * hw;
+          let b = sb + (infernal ? 0.03 : 0.036) * sw - (infernal ? 0.026 : 0.014) * hw;
+
+          // Restrained vibrancy polish
+          const l2 = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          r = l2 + (r - l2) * sat;
+          g = l2 + (g - l2) * sat;
+          b = l2 + (b - l2) * sat;
+
+          lut[ptr++] = Math.max(0, Math.min(255, Math.round(r * 255)));
+          lut[ptr++] = Math.max(0, Math.min(255, Math.round(g * 255)));
+          lut[ptr++] = Math.max(0, Math.min(255, Math.round(b * 255)));
+        }
+      }
+    }
+    return lut;
+  }
+
+  private applyColorGradingLut(ctx: CanvasRenderingContext2D, lut: Uint8Array): void {
+    const imgData = ctx.getImageData(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    const d = imgData.data;
+    const len = d.length;
+
+    for (let i = 0; i < len; i += 4) {
+      const r = d[i];
+      const g = d[i + 1];
+      const b = d[i + 2];
+
+      const ri = r >> 4;
+      const gi = g >> 4;
+      const bi = b >> 4;
+      const rf = r & 15;
+      const gf = g & 15;
+      const bf = b & 15;
+      const irf = 16 - rf;
+      const igf = 16 - gf;
+      const ibf = 16 - bf;
+
+      // Stride: r + 17*g + 289*b, *3 bytes
+      const i000 = (ri + gi * 17 + bi * 289) * 3;
+      const i100 = i000 + 3;
+      const i010 = i000 + 51;
+      const i110 = i010 + 3;
+      const i001 = i000 + 867;
+      const i101 = i001 + 3;
+      const i011 = i001 + 51;
+      const i111 = i011 + 3;
+
+      const w000 = irf * igf * ibf;
+      const w100 = rf * igf * ibf;
+      const w010 = irf * gf * ibf;
+      const w110 = rf * gf * ibf;
+      const w001 = irf * igf * bf;
+      const w101 = rf * igf * bf;
+      const w011 = irf * gf * bf;
+      const w111 = rf * gf * bf;
+
+      d[i] =
+        (lut[i000] * w000 +
+          lut[i100] * w100 +
+          lut[i010] * w010 +
+          lut[i110] * w110 +
+          lut[i001] * w001 +
+          lut[i101] * w101 +
+          lut[i011] * w011 +
+          lut[i111] * w111 +
+          2048) >>
+        12;
+      d[i + 1] =
+        (lut[i000 + 1] * w000 +
+          lut[i100 + 1] * w100 +
+          lut[i010 + 1] * w010 +
+          lut[i110 + 1] * w110 +
+          lut[i001 + 1] * w001 +
+          lut[i101 + 1] * w101 +
+          lut[i011 + 1] * w011 +
+          lut[i111 + 1] * w111 +
+          2048) >>
+        12;
+      d[i + 2] =
+        (lut[i000 + 2] * w000 +
+          lut[i100 + 2] * w100 +
+          lut[i010 + 2] * w010 +
+          lut[i110 + 2] * w110 +
+          lut[i001 + 2] * w001 +
+          lut[i101 + 2] * w101 +
+          lut[i011 + 2] * w011 +
+          lut[i111 + 2] * w111 +
+          2048) >>
+        12;
+    }
+
+    ctx.putImageData(imgData, 0, 0);
   }
 
   private initCloak(): void {
@@ -1687,8 +1869,8 @@ export class PixelBattleEngine {
           ? '#FDE047'
           : '#EA580C'
         : Math.random() < 0.65
-          ? '#66F2FF'
-          : '#FFFFFF';
+          ? '#75f5ff'
+          : '#fff5d6';
       this.pushParticle({
         x: tailPos.x + (Math.random() - 0.5) * 4,
         y: tailPos.y + (Math.random() - 0.5) * 4,
@@ -2226,7 +2408,7 @@ export class PixelBattleEngine {
       hitX,
       hitY - 14,
       isCrit ? `${amount}!` : `-${amount}`,
-      isCrit ? '#ffd147' : '#ffffff',
+      isCrit ? '#ffd147' : '#fff5d6',
       isCrit ? 3 : 2
     );
 
@@ -3354,8 +3536,8 @@ export class PixelBattleEngine {
               ? '#FEF08A'
               : '#F97316'
             : Math.random() < 0.5
-              ? '#66F2FF'
-              : '#FFFFFF',
+              ? '#75f5ff'
+              : '#fff5d6',
           size: isP2 ? 2 : 1,
           gravity: -16,
         });
@@ -4559,7 +4741,7 @@ export class PixelBattleEngine {
         vy: -8 - Math.random() * 12,
         life: 0.22 + Math.random() * 0.1,
         maxLife: 0.32,
-        color: i === 0 ? '#ffffff' : '#e2e8f0',
+        color: i === 0 ? '#fff4d6' : '#c6d0ea',
         size: i % 2 === 0 ? 2 : 1,
         gravity: 24,
       });
@@ -4569,8 +4751,8 @@ export class PixelBattleEngine {
   private spawnSlashParticles(x: number, y: number, isCrit: boolean): void {
     const count = isCrit ? 16 : 10;
     const colors = isCrit
-      ? ['#ffd147', '#ffffff', '#66F2FF', '#7C3AED']
-      : ['#66F2FF', '#ffffff', '#B39BC8', '#C99A6B'];
+      ? ['#ffd147', '#fff4d6', '#75f5ff', '#8a4cf0']
+      : ['#75f5ff', '#fff4d6', '#b8a2db', '#e0ab6c'];
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = (isCrit ? 48 : 30) + Math.random() * 72;
@@ -4590,7 +4772,7 @@ export class PixelBattleEngine {
   }
 
   private spawnCrystalBurst(x: number, y: number, count: number): void {
-    const colors = ['#66F2FF', '#12B5E8', '#7C3AED', '#FFFFFF'];
+    const colors = ['#75f5ff', '#1fb5e8', '#8a4cf0', '#fff7d6'];
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 28 + Math.random() * 76;
@@ -4610,7 +4792,7 @@ export class PixelBattleEngine {
   }
 
   private spawnInfernalBurst(x: number, y: number, count: number): void {
-    const colors = ['#FDE047', '#F97316', '#DC2626', '#FFFBEB'];
+    const colors = ['#ffe066', '#f26a21', '#d9264e', '#fff6d4'];
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const speed = 32 + Math.random() * 88;
@@ -4630,7 +4812,7 @@ export class PixelBattleEngine {
   }
 
   private spawnHealParticles(x: number, y: number): void {
-    const colors = ['#34d399', '#a7f3d0', '#ffffff', '#6ee7b7'];
+    const colors = ['#3ee09e', '#b3f7d8', '#fff5d6', '#72edb9'];
     for (let i = 0; i < 18; i++) {
       this.particles.push({
         x: x + (Math.random() * 20 - 10),
@@ -4655,7 +4837,7 @@ export class PixelBattleEngine {
         vy: -12 - Math.random() * 22,
         life: 0.24 + Math.random() * 0.16,
         maxLife: 0.4,
-        color: i % 2 === 0 ? '#cbd5e1' : tint,
+        color: i % 2 === 0 ? '#b7c2df' : tint,
         size: 2,
         gravity: 50,
       });
@@ -4680,6 +4862,69 @@ export class PixelBattleEngine {
     });
   }
 
+  private drawPixelBeam(
+    ctx: CanvasRenderingContext2D,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    thickness: number,
+    color: string
+  ): void {
+    const ix1 = Math.round(x1);
+    const iy1 = Math.round(y1);
+    const ix2 = Math.round(x2);
+    const iy2 = Math.round(y2);
+    const dx = ix2 - ix1;
+    const dy = iy2 - iy1;
+    const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
+    const t = Math.max(1, Math.round(thickness));
+    const half = Math.floor(t / 2);
+    ctx.fillStyle = color;
+
+    for (let i = 0; i <= steps; i++) {
+      const px = Math.round(ix1 + (dx * i) / steps);
+      const py = Math.round(iy1 + (dy * i) / steps);
+      ctx.fillRect(px - half, py - half, t, t);
+    }
+  }
+
+  private drawPixelRing(
+    ctx: CanvasRenderingContext2D,
+    cx: number,
+    cy: number,
+    radius: number,
+    thickness: number,
+    color: string
+  ): void {
+    const icx = Math.round(cx);
+    const icy = Math.round(cy);
+    const r = Math.max(2, Math.round(radius));
+    const t = Math.max(1, Math.round(thickness));
+    ctx.fillStyle = color;
+
+    let x = r;
+    let y = 0;
+    let err = 1 - x;
+    while (x >= y) {
+      ctx.fillRect(icx + x, icy + y, t, t);
+      ctx.fillRect(icx + y, icy + x, t, t);
+      ctx.fillRect(icx - y, icy + x, t, t);
+      ctx.fillRect(icx - x, icy + y, t, t);
+      ctx.fillRect(icx - x, icy - y, t, t);
+      ctx.fillRect(icx - y, icy - x, t, t);
+      ctx.fillRect(icx + y, icy - x, t, t);
+      ctx.fillRect(icx + x, icy - y, t, t);
+      y++;
+      if (err < 0) {
+        err += 2 * y + 1;
+      } else {
+        x--;
+        err += 2 * (y - x + 1);
+      }
+    }
+  }
+
   private render(): void {
     const ctx = this.ctx;
     ctx.imageSmoothingEnabled = false;
@@ -4696,14 +4941,10 @@ export class PixelBattleEngine {
     const cx = Math.round(this.camX) - shakeX;
     const cy = Math.round(this.camY) - shakeY;
 
+    // 1. Crisp 1:1 480x270 nearest-neighbor world & character pass (zero mixels!)
     this.drawMistyForestBackdrop(ctx, cx, cy);
 
     ctx.save();
-    if (this.ldZoom > 1.005) {
-      ctx.translate(VIEW_WIDTH / 2, VIEW_HEIGHT / 2);
-      ctx.scale(this.ldZoom, this.ldZoom);
-      ctx.translate(-VIEW_WIDTH / 2, -VIEW_HEIGHT / 2);
-    }
     ctx.translate(-cx, -cy);
 
     this.drawForegroundForestRuins(ctx, cx, cy);
@@ -4717,24 +4958,166 @@ export class PixelBattleEngine {
 
     ctx.restore();
 
+    // 2. Restrained Emissive-Only Optical Bloom Pass
+    this.renderEmissiveBloom(ctx, cx, cy);
+
+    // 3. Lightweight 17x17x17 3D Color Grading LUT Pass (cool shadows, warm highlights)
+    const activeLut = this.dPhase2Triggered ? this.lutInfernal : this.lutNormal;
+    this.applyColorGradingLut(ctx, activeLut);
+
+    // 4. Crisp Letterbox Framing & Edge Pick-Up Indicators
     if (this.ldLetterbox > 0.01) {
       const barH = Math.round(28 * this.ldLetterbox);
-      ctx.fillStyle = '#09070f';
+      ctx.fillStyle = '#150d22';
       ctx.fillRect(0, 0, VIEW_WIDTH, barH);
       ctx.fillRect(0, VIEW_HEIGHT - barH, VIEW_WIDTH, barH);
-      ctx.fillStyle = 'rgba(250, 204, 21, 0.35)';
+      ctx.fillStyle = 'rgba(255, 212, 82, 0.42)';
       ctx.fillRect(0, barH, VIEW_WIDTH, 1);
       ctx.fillRect(0, VIEW_HEIGHT - barH - 1, VIEW_WIDTH, 1);
     }
 
     if (!this.titleMode) {
       if (this.activeDrop) {
-        this.drawEdgeIndicator(ctx, this.activeDrop.x - cx, this.activeDrop.y - 16 - cy, '#66F2FF');
+        this.drawEdgeIndicator(ctx, this.activeDrop.x - cx, this.activeDrop.y - 16 - cy, '#75f5ff');
       }
       if (this.activeSkillDrop) {
-        this.drawEdgeIndicator(ctx, this.activeSkillDrop.x - cx, this.activeSkillDrop.y - 18 - cy, '#facc15');
+        this.drawEdgeIndicator(ctx, this.activeSkillDrop.x - cx, this.activeSkillDrop.y - 18 - cy, '#ffd25a');
       }
     }
+  }
+
+  private renderEmissiveBloom(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+    const eCtx = this.emissiveCtx;
+    eCtx.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    eCtx.save();
+    eCtx.translate(-cx, -cy);
+
+    // Emissive Dragon Eye, Chest Core & Tail Crystal
+    if (this.dAiState !== 'defeated' && this.dAiState !== 'blink_fade') {
+      const chest = this.getDragonMouthOrChestPos();
+      const tail = this.getDragonTailTipPos();
+      const eyeX = Math.round(this.dFacing === -1 ? this.dX + 14 : this.dX + WYVERN_W - 14);
+      const eyeY = Math.round(this.dY + 12);
+
+      eCtx.fillStyle = this.dFurious
+        ? '#ff5436'
+        : this.dPhase2Triggered
+          ? '#ff8528'
+          : '#52e8ff';
+      eCtx.fillRect(eyeX - 2, eyeY - 1, 4, 3);
+      eCtx.fillRect(Math.round(chest.x) - 5, Math.round(chest.y) - 4, 10, 8);
+      eCtx.fillStyle = this.dPhase2Triggered ? '#ffe066' : '#75f5ff';
+      eCtx.fillRect(Math.round(tail.x) - 3, Math.round(tail.y) - 3, 6, 6);
+    }
+
+    // Emissive Awakened Warrior Core
+    if (this.wAwakened && this.wAwakeningTimer <= 0) {
+      eCtx.fillStyle = '#ff9e3b';
+      eCtx.fillRect(Math.round(this.wX + 10), Math.round(this.wY + 6), 12, 16);
+    }
+
+    // Emissive Pickups
+    if (!this.titleMode) {
+      if (this.activeDrop) {
+        const dx = Math.round(this.activeDrop.x);
+        const dy = Math.round(this.activeDrop.y);
+        eCtx.fillStyle = WEAPON_SPECS[this.activeDrop.weapon].smearColor;
+        eCtx.fillRect(dx - 3, dy - 22, 6, 18);
+      }
+      if (this.activeSkillDrop) {
+        const dx = Math.round(this.activeSkillDrop.x);
+        const dy = Math.round(this.activeSkillDrop.y);
+        eCtx.fillStyle = '#ffd25a';
+        eCtx.fillRect(dx - 5, dy - 21, 10, 10);
+      }
+    }
+
+    // Emissive Beams
+    if (
+      this.dAiState === 'p1_beam_sweep' ||
+      this.dAiState === 'p2_beam_sweep' ||
+      this.dAiState === 'ld_xbeam_sweep' ||
+      this.dAiState === 'ld_finisher_breath'
+    ) {
+      const isP2 = this.dAiState !== 'p1_beam_sweep';
+      const mouth = this.getDragonMouthOrChestPos();
+      const len = isP2 ? 415 : 220;
+      const angles =
+        this.dAiState === 'ld_xbeam_sweep'
+          ? [this.dBeamCurrentAngle, this.ldXBeamAngle2]
+          : [this.dBeamCurrentAngle];
+      for (const ang of angles) {
+        this.drawPixelBeam(
+          eCtx,
+          mouth.x,
+          mouth.y,
+          mouth.x + Math.cos(ang) * len,
+          mouth.y + Math.sin(ang) * len,
+          isP2 ? 12 : 5,
+          isP2 ? '#ff8b2b' : '#5eeeff'
+        );
+      }
+    }
+
+    // Emissive Shards, Orbs, Pillars, Patches, Boss Waves & Lightning
+    for (const sh of this.shards) {
+      eCtx.fillStyle = sh.reflected ? '#ffd147' : sh.fiery ? '#ff7324' : '#5ceeff';
+      eCtx.fillRect(Math.round(sh.x) - 3, Math.round(sh.y) - 2, 6, 4);
+    }
+    for (const orb of this.emberOrbs) {
+      eCtx.fillStyle = '#ff7b24';
+      eCtx.fillRect(Math.round(orb.x) - 4, Math.round(orb.y) - 4, 8, 8);
+    }
+    for (const fp of this.flamePatches) {
+      eCtx.fillStyle = '#ff7b24';
+      eCtx.fillRect(Math.round(fp.x - fp.w / 2), Math.round(fp.y - 4), fp.w, 4);
+    }
+    for (const fp of this.flamePillars) {
+      if (fp.warnTimer <= 0) {
+        eCtx.fillStyle = '#ff9a3b';
+        eCtx.fillRect(Math.round(fp.x) - 6, Math.round(fp.y) - 104, 12, 104);
+      }
+    }
+    for (const bw of this.bossWaves) {
+      eCtx.fillStyle = '#ff8b2b';
+      if (bw.tall) eCtx.fillRect(Math.round(bw.x) - 4, Math.round(bw.y) - 50, 8, 50);
+      else eCtx.fillRect(Math.round(bw.x) - 2, Math.round(bw.y) - 9, 4, 18);
+    }
+    for (const bolt of this.lightningQueue) {
+      if (bolt.struck && bolt.flashLife > 0) {
+        eCtx.fillStyle = '#ffe066';
+        eCtx.fillRect(Math.round(bolt.x) - 3, 40, 6, 240);
+      }
+    }
+    for (const sw of this.slashWaves) {
+      eCtx.fillStyle = this.activeBuff === 'blade_flurry' ? '#5ed4ff' : '#ff9a3b';
+      eCtx.fillRect(Math.round(sw.x) - 2, Math.round(sw.y) - 7, 4, 14);
+    }
+    if (this.slashSmear.active) {
+      eCtx.fillStyle = this.wAwakened
+        ? '#ff8b2b'
+        : this.slashSmear.isCrit
+          ? '#ffd147'
+          : WEAPON_SPECS[this.slashSmear.weapon].smearColor;
+      eCtx.fillRect(Math.round(this.slashSmear.x) - 5, Math.round(this.slashSmear.y) - 5, 10, 10);
+    }
+
+    eCtx.restore();
+
+    // Soft 2-step optical downsample (480x270 -> 60x34 -> 120x68) & restrained additive composite
+    this.bloomMidCtx.clearRect(0, 0, 60, 34);
+    this.bloomMidCtx.drawImage(this.emissiveCanvas, 0, 0, 60, 34);
+    this.bloomCtx.clearRect(0, 0, 120, 68);
+    this.bloomCtx.drawImage(this.bloomMidCanvas, 0, 0, 120, 68);
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'low';
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = this.lastDanceMode ? 0.28 : this.dPhase2Triggered ? 0.24 : 0.19;
+    ctx.drawImage(this.bloomCanvas, 0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    ctx.restore();
+    ctx.imageSmoothingEnabled = false;
   }
 
   private drawEdgeIndicator(
@@ -4747,9 +5130,9 @@ export class PixelBattleEngine {
       const edgeX = screenX < 10 ? 10 : VIEW_WIDTH - 16;
       const edgeY = Math.max(36, Math.min(VIEW_HEIGHT - 36, Math.round(screenY)));
       const pulse = Math.floor(this.elapsed * 8) % 2 === 0;
-      ctx.fillStyle = pulse ? color : '#ffffff';
+      ctx.fillStyle = pulse ? color : '#fff4d6';
       ctx.fillRect(edgeX, edgeY, 6, 6);
-      ctx.fillStyle = '#0e0b14';
+      ctx.fillStyle = '#1b102b';
       ctx.fillRect(edgeX + 1, edgeY + 1, 4, 4);
       ctx.fillStyle = color;
       ctx.fillRect(edgeX + 2, edgeY + 2, 2, 2);
@@ -4757,13 +5140,14 @@ export class PixelBattleEngine {
   }
 
   private drawMistyForestBackdrop(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+    // Cool, slightly desaturated cyan-indigo sky & mist bands for strong figure-ground separation
     const skyBands = [
-      { y: 0, h: 38, c: '#293f47' },
-      { y: 38, h: 40, c: '#395760' },
-      { y: 78, h: 44, c: '#4d737a' },
-      { y: 122, h: 48, c: '#6a979e' },
-      { y: 170, h: 50, c: '#8fc0c4' },
-      { y: 220, h: 50, c: '#b3e0e1' },
+      { y: 0, h: 38, c: '#233447' },
+      { y: 38, h: 40, c: '#30485b' },
+      { y: 78, h: 44, c: '#426070' },
+      { y: 122, h: 48, c: '#5b818c' },
+      { y: 170, h: 50, c: '#7ba6af' },
+      { y: 220, h: 50, c: '#9bc4cb' },
     ];
     for (const b of skyBands) {
       ctx.fillStyle = b.c;
@@ -4773,10 +5157,10 @@ export class PixelBattleEngine {
     const farX = -Math.round(cx * 0.18);
     const farY = -Math.round(cy * 0.12);
     for (let x = farX % 112; x < VIEW_WIDTH + 112; x += 112) {
-      ctx.fillStyle = '#7ba8ae';
+      ctx.fillStyle = '#68919e';
       ctx.fillRect(x + 14, 18 + farY, 8, 250);
       ctx.fillRect(x + 76, 12 + farY, 6, 256);
-      ctx.fillStyle = '#87b7bc';
+      ctx.fillStyle = '#739ea9';
       ctx.fillRect(x + 42, 130 + farY, 10, 120);
       ctx.fillRect(x + 56, 146 + farY, 8, 104);
       ctx.fillRect(x + 40, 126 + farY, 26, 6);
@@ -4785,24 +5169,24 @@ export class PixelBattleEngine {
     const midX = -Math.round(cx * 0.42);
     const midY = -Math.round(cy * 0.28);
     for (let x = midX % 144; x < VIEW_WIDTH + 144; x += 144) {
-      ctx.fillStyle = '#3f5b61';
+      ctx.fillStyle = '#384e5e';
       ctx.fillRect(x + 12, 0, 16, VIEW_HEIGHT);
-      ctx.fillStyle = '#4e6f75';
+      ctx.fillStyle = '#466170';
       ctx.fillRect(x + 14, 0, 4, VIEW_HEIGHT);
 
-      ctx.fillStyle = '#5e534d';
+      ctx.fillStyle = '#4d4859';
       ctx.fillRect(x + 92, 0, 14, VIEW_HEIGHT);
-      ctx.fillStyle = '#73665f';
+      ctx.fillStyle = '#605a6b';
       ctx.fillRect(x + 94, 0, 4, VIEW_HEIGHT);
 
-      ctx.fillStyle = '#5b8f80';
+      ctx.fillStyle = '#4c7978';
       ctx.fillRect(x - 6, 18 + midY, 52, 26);
       ctx.fillRect(x + 72, 28 + midY, 56, 24);
-      ctx.fillStyle = '#75ab97';
+      ctx.fillStyle = '#62948e';
       ctx.fillRect(x + 2, 12 + midY, 36, 18);
       ctx.fillRect(x + 80, 22 + midY, 38, 16);
 
-      ctx.fillStyle = '#4e8071';
+      ctx.fillStyle = '#436e6b';
       ctx.fillRect(x + 34, 42 + midY, 2, 34);
       ctx.fillRect(x + 36, 56 + midY, 2, 24);
       ctx.fillRect(x + 82, 50 + midY, 2, 38);
@@ -4813,44 +5197,44 @@ export class PixelBattleEngine {
   private drawForegroundForestRuins(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
     const accentX = Math.round(456 + cx * 0.22);
     const accentY = Math.round(cy * 0.1);
-    ctx.fillStyle = '#a87659';
+    ctx.fillStyle = '#8b6866';
     ctx.fillRect(accentX, 86 + accentY, 18, 198);
-    ctx.fillStyle = '#cc997a';
+    ctx.fillStyle = '#ad877c';
     ctx.fillRect(accentX + 3, 86 + accentY, 6, 198);
-    ctx.fillStyle = '#7d533d';
+    ctx.fillStyle = '#624852';
     ctx.fillRect(accentX + 14, 86 + accentY, 4, 198);
-    ctx.fillStyle = '#a87659';
+    ctx.fillStyle = '#8b6866';
     ctx.fillRect(accentX - 18, 108 + accentY, 20, 6);
     ctx.fillRect(accentX + 16, 102 + accentY, 22, 6);
-    ctx.fillStyle = '#1f9157';
+    ctx.fillStyle = '#257d5a';
     ctx.fillRect(accentX - 36, 54 + accentY, 92, 42);
-    ctx.fillStyle = '#33c476';
+    ctx.fillStyle = '#38a671';
     ctx.fillRect(accentX - 28, 42 + accentY, 76, 36);
-    ctx.fillStyle = '#62e89a';
+    ctx.fillStyle = '#5ecc8a';
     ctx.fillRect(accentX - 18, 36 + accentY, 48, 20);
-    ctx.fillStyle = '#2aad68';
+    ctx.fillStyle = '#2d8f66';
     ctx.fillRect(accentX - 24, 94 + accentY, 2, 26);
     ctx.fillRect(accentX + 36, 94 + accentY, 2, 32);
     ctx.fillRect(accentX + 46, 86 + accentY, 2, 22);
 
     const bigTreeX = Math.round(14 + cx * 0.08);
-    ctx.fillStyle = '#241a18';
+    ctx.fillStyle = '#261c2e';
     ctx.fillRect(bigTreeX, 42, 44, 240);
-    ctx.fillStyle = '#362724';
+    ctx.fillStyle = '#3a2b3f';
     ctx.fillRect(bigTreeX + 6, 42, 14, 240);
-    ctx.fillStyle = '#140e0e';
+    ctx.fillStyle = '#191124';
     ctx.fillRect(bigTreeX + 34, 42, 10, 240);
-    ctx.fillStyle = '#241a18';
+    ctx.fillStyle = '#261c2e';
     ctx.fillRect(bigTreeX + 44, 118, 46, 12);
     ctx.fillRect(bigTreeX + 76, 98, 28, 10);
     ctx.fillRect(bigTreeX + 44, 154, 30, 8);
-    ctx.fillStyle = '#132e30';
+    ctx.fillStyle = '#1a2e3b';
     ctx.fillRect(bigTreeX - 20, 0, 146, 86);
-    ctx.fillStyle = '#1c4244';
+    ctx.fillStyle = '#24414f';
     ctx.fillRect(bigTreeX - 10, 12, 124, 62);
-    ctx.fillStyle = '#27595a';
+    ctx.fillStyle = '#2f5763';
     ctx.fillRect(bigTreeX + 8, 22, 86, 34);
-    ctx.fillStyle = '#3a8758';
+    ctx.fillStyle = '#3b825e';
     ctx.fillRect(bigTreeX + 54, 86, 3, 30);
     ctx.fillRect(bigTreeX + 68, 86, 2, 44);
     ctx.fillRect(bigTreeX + 94, 86, 3, 28);
@@ -4869,24 +5253,24 @@ export class PixelBattleEngine {
       }
     }
 
-    ctx.fillStyle = '#383640';
+    ctx.fillStyle = '#37324d';
     ctx.fillRect(108, 288, 28, 26);
-    ctx.fillStyle = '#17151a';
+    ctx.fillStyle = '#1b142b';
     ctx.fillRect(111, 291, 22, 20);
-    ctx.fillStyle = '#73a895';
+    ctx.fillStyle = '#6ca199';
     ctx.fillRect(113, 293, 18, 16);
-    ctx.fillStyle = '#a6d8db';
+    ctx.fillStyle = '#9bc9cc';
     ctx.fillRect(115, 295, 14, 7);
-    ctx.fillStyle = '#211F24';
+    ctx.fillStyle = '#231c36';
     ctx.fillRect(121, 292, 2, 18);
     ctx.fillRect(112, 300, 20, 2);
 
-    ctx.fillStyle = '#383640';
+    ctx.fillStyle = '#37324d';
     ctx.fillRect(580, 282, 48, 58);
-    ctx.fillStyle = '#121015';
+    ctx.fillStyle = '#191329';
     ctx.fillRect(586, 288, 36, 52);
     ctx.fillRect(592, 284, 24, 6);
-    ctx.fillStyle = '#09080b';
+    ctx.fillStyle = '#120d1f';
     ctx.fillRect(592, 292, 24, 48);
 
     this.drawMossyBoulder(ctx, 344, 188);
@@ -4905,33 +5289,33 @@ export class PixelBattleEngine {
 
   private drawStoneTerrace(ctx: CanvasRenderingContext2D, x: number, y: number, w: number): void {
     const h = WORLD_HEIGHT - y;
-    ctx.fillStyle = '#211F24';
+    ctx.fillStyle = '#221c33';
     ctx.fillRect(x, y, w, h);
 
-    ctx.fillStyle = '#28252c';
+    ctx.fillStyle = '#2c2540';
     for (let bx = x + 12; bx < x + w - 12; bx += 24) {
       ctx.fillRect(bx, y + 14, 14, 6);
       ctx.fillRect(bx - 6, y + 28, 16, 6);
     }
 
-    ctx.fillStyle = '#36343d';
+    ctx.fillStyle = '#37324d';
     ctx.fillRect(x, y + 2, w, 7);
     ctx.fillRect(x, y, 6, h);
     ctx.fillRect(x + w - 6, y, 6, h);
 
-    ctx.fillStyle = '#4a4854';
+    ctx.fillStyle = '#534d70';
     ctx.fillRect(x, y + 2, w, 2);
-    ctx.fillStyle = '#141217';
+    ctx.fillStyle = '#181229';
     for (let bx = x; bx < x + w; bx += 12) {
       ctx.fillRect(bx, y + 2, 1, 7);
     }
     ctx.fillRect(x, y + 9, w, 1);
 
-    ctx.fillStyle = '#2a9c42';
+    ctx.fillStyle = '#24824c';
     ctx.fillRect(x, y, w, 3);
-    ctx.fillStyle = '#4fd95b';
+    ctx.fillStyle = '#47c765';
     ctx.fillRect(x, y - 1, w, 2);
-    ctx.fillStyle = '#8cf274';
+    ctx.fillStyle = '#a2f285';
     for (let gx = x + 2; gx < x + w - 4; gx += 7) {
       ctx.fillRect(gx, y - 1, 4, 1);
       if ((gx * 3) % 5 === 0) {
@@ -4942,26 +5326,26 @@ export class PixelBattleEngine {
   }
 
   private drawElevatedRuinsLedge(ctx: CanvasRenderingContext2D, x: number, y: number, w: number): void {
-    ctx.fillStyle = '#211F24';
+    ctx.fillStyle = '#221c33';
     ctx.fillRect(x + 2, y + 3, w - 4, 9);
 
-    ctx.fillStyle = '#36343d';
+    ctx.fillStyle = '#37324d';
     ctx.fillRect(x, y + 2, w, 10);
-    ctx.fillStyle = '#211F24';
+    ctx.fillStyle = '#221c33';
     ctx.fillRect(x + 4, y + 5, w - 8, 4);
-    ctx.fillStyle = '#4a4854';
+    ctx.fillStyle = '#534d70';
     ctx.fillRect(x, y + 2, w, 2);
-    ctx.fillStyle = '#141217';
+    ctx.fillStyle = '#181229';
     ctx.fillRect(x, y + 12, w, 2);
     for (let bx = x; bx < x + w; bx += 12) {
       ctx.fillRect(bx, y + 2, 1, 10);
     }
 
-    ctx.fillStyle = '#2a9c42';
+    ctx.fillStyle = '#24824c';
     ctx.fillRect(x, y, w, 3);
-    ctx.fillStyle = '#4fd95b';
+    ctx.fillStyle = '#47c765';
     ctx.fillRect(x, y - 1, w, 2);
-    ctx.fillStyle = '#8cf274';
+    ctx.fillStyle = '#a2f285';
     for (let gx = x + 3; gx < x + w - 4; gx += 8) {
       ctx.fillRect(gx, y - 1, 4, 1);
       if (gx % 3 === 0) {
@@ -4971,33 +5355,33 @@ export class PixelBattleEngine {
   }
 
   private drawMossyBoulder(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-    ctx.fillStyle = '#141217';
+    ctx.fillStyle = '#181229';
     ctx.fillRect(x + 2, y - 15, 22, 15);
     ctx.fillRect(x, y - 11, 26, 11);
-    ctx.fillStyle = '#36343d';
+    ctx.fillStyle = '#37324d';
     ctx.fillRect(x + 1, y - 10, 24, 9);
     ctx.fillRect(x + 3, y - 14, 20, 12);
-    ctx.fillStyle = '#4c4a56';
+    ctx.fillStyle = '#534d70';
     ctx.fillRect(x + 4, y - 13, 14, 5);
-    ctx.fillStyle = '#2a9c42';
+    ctx.fillStyle = '#24824c';
     ctx.fillRect(x + 3, y - 14, 12, 3);
     ctx.fillRect(x + 16, y - 10, 6, 3);
-    ctx.fillStyle = '#4fd95b';
+    ctx.fillStyle = '#47c765';
     ctx.fillRect(x + 4, y - 15, 9, 2);
     ctx.fillRect(x + 17, y - 11, 4, 2);
-    ctx.fillStyle = '#e03c3c';
+    ctx.fillStyle = '#e04251';
     ctx.fillRect(x + 20, y - 13, 2, 2);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#fff5d6';
     ctx.fillRect(x + 20, y - 13, 1, 1);
   }
 
   private drawMushroom(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-    ctx.fillStyle = '#e8dcc8';
+    ctx.fillStyle = '#eddcb9';
     ctx.fillRect(x + 1, y - 3, 2, 3);
-    ctx.fillStyle = '#d93636';
+    ctx.fillStyle = '#db394c';
     ctx.fillRect(x, y - 5, 4, 2);
     ctx.fillRect(x + 1, y - 6, 2, 1);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#fff4d6';
     ctx.fillRect(x, y - 5, 1, 1);
     ctx.fillRect(x + 2, y - 6, 1, 1);
   }
@@ -5010,17 +5394,17 @@ export class PixelBattleEngine {
     const bob = Math.round(Math.sin(this.elapsed * 5) * 2);
     const specColor = WEAPON_SPECS[drop.weapon].smearColor;
 
-    ctx.fillStyle = 'rgba(102, 242, 255, 0.16)';
+    ctx.fillStyle = 'rgba(117, 245, 255, 0.16)';
     ctx.fillRect(dx - 6, dy - 64, 12, 64);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.24)';
+    ctx.fillStyle = 'rgba(255, 244, 214, 0.22)';
     ctx.fillRect(dx - 2, dy - 56, 4, 56);
 
     ctx.fillStyle = specColor;
     ctx.fillRect(dx - 8, dy - 2, 16, 2);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#fff5d6';
     ctx.fillRect(dx - 4, dy - 2, 8, 1);
 
-    const wSheet = this.getWeaponSprite(drop.weapon);
+    const wSheet = this.getWeaponSprite(drop.weapon).idle;
     ctx.drawImage(wSheet.canvas, dx - Math.floor(wSheet.width / 2), dy - 21 + bob);
   }
 
@@ -5031,24 +5415,24 @@ export class PixelBattleEngine {
     const dy = Math.round(drop.y);
     const bob = Math.round(Math.cos(this.elapsed * 6) * 2);
 
-    ctx.fillStyle = 'rgba(250, 204, 21, 0.2)';
+    ctx.fillStyle = 'rgba(255, 210, 89, 0.2)';
     ctx.fillRect(dx - 7, dy - 72, 14, 72);
-    ctx.fillStyle = 'rgba(192, 132, 252, 0.28)';
+    ctx.fillStyle = 'rgba(179, 128, 247, 0.26)';
     ctx.fillRect(dx - 2, dy - 64, 4, 64);
 
     // Radiant 1px-outlined Super Skill Orb
     const oy = dy - 16 + bob;
-    ctx.fillStyle = '#24112B';
+    ctx.fillStyle = '#1e1033';
     ctx.fillRect(dx - 6, oy - 6, 12, 12);
-    ctx.fillStyle = '#9333ea';
+    ctx.fillStyle = '#8a4cf0';
     ctx.fillRect(dx - 5, oy - 5, 10, 10);
-    ctx.fillStyle = '#facc15';
+    ctx.fillStyle = '#ffd25a';
     ctx.fillRect(dx - 4, oy - 4, 8, 8);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#fff6d4';
     ctx.fillRect(dx - 2, oy - 2, 4, 4);
   }
 
-  private getWeaponSprite(weapon: WeaponType): SpriteSheet {
+  private getWeaponSprite(weapon: WeaponType): WeaponSpriteSet {
     return this.sprites.weapons[weapon];
   }
 
@@ -5090,7 +5474,7 @@ export class PixelBattleEngine {
     if (this.wHp <= 0 || this.wRollTimer > 0 || this.cloakNodes.length < 2) return;
     for (let i = 0; i < this.cloakNodes.length - 1; i++) {
       const n = this.cloakNodes[i];
-      ctx.fillStyle = i < 3 ? '#4a8b8c' : '#2f6266';
+      ctx.fillStyle = i < 3 ? '#4ba39f' : '#295370';
       const w = i < 2 ? 3 : 2;
       ctx.fillRect(Math.round(n.x), Math.round(n.y), w, w);
     }
@@ -5115,7 +5499,7 @@ export class PixelBattleEngine {
     const hDist = Math.max(0, shadowSurfaceY - (this.wY + WARRIOR_FEET_OFFSET));
     const shadowScale = Math.max(0.45, 1 - hDist / 110);
     const ovalW = Math.round(14 * shadowScale);
-    ctx.fillStyle = 'rgba(14, 11, 20, 0.58)';
+    ctx.fillStyle = 'rgba(24, 16, 42, 0.58)';
     ctx.fillRect(Math.round(this.wX + 16 - ovalW / 2), shadowSurfaceY - 1, ovalW, 2);
     ctx.fillRect(
       Math.round(this.wX + 16 - (ovalW - 4) / 2),
@@ -5128,18 +5512,18 @@ export class PixelBattleEngine {
       const coreCenter = this.getDragonCoreCenter();
       const dFloor = getBaseFloorYAt(coreCenter.x);
       const dShadowW = Math.round(46 * Math.max(0.35, 1 - (dFloor - (coreCenter.y + 18)) / 140));
-      ctx.fillStyle = 'rgba(20, 11, 30, 0.44)';
+      ctx.fillStyle = 'rgba(24, 15, 42, 0.45)';
       ctx.fillRect(Math.round(coreCenter.x - dShadowW / 2), dFloor - 2, dShadowW, 3);
     }
 
     if (this.wHealAnimTimer > 0) {
-      ctx.fillStyle = 'rgba(52, 211, 153, 0.28)';
+      ctx.fillStyle = 'rgba(62, 224, 158, 0.28)';
       ctx.fillRect(Math.round(this.wX + 6), Math.round(this.wY - 6), 20, 32);
     }
 
     // Active Aegis Shield glow ring around warrior
     if (this.wShield > 0) {
-      ctx.fillStyle = 'rgba(250, 204, 21, 0.22)';
+      ctx.fillStyle = 'rgba(255, 210, 89, 0.22)';
       ctx.fillRect(Math.round(this.wX + 3), Math.round(this.wY), 26, 26);
     }
 
@@ -5176,26 +5560,29 @@ export class PixelBattleEngine {
       const gx = Math.round(anchor.x);
       const gy = Math.round(anchor.y);
 
-      ctx.fillStyle = pulse ? '#ffd147' : this.dPhase2Triggered ? '#F97316' : '#66F2FF';
+      ctx.fillStyle = pulse ? '#ffd147' : this.dPhase2Triggered ? '#ff7b24' : '#75f5ff';
       ctx.fillRect(gx - 8, gy - 1, 16, 2);
       ctx.fillRect(gx - 1, gy - 8, 2, 16);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#fff5d6';
       ctx.fillRect(gx - 3, gy - 1, 6, 2);
       ctx.fillRect(gx - 1, gy - 3, 2, 6);
 
       const core = this.getDragonCoreCenter();
-      ctx.fillStyle = '#24112B';
+      ctx.fillStyle = '#1e1033';
       ctx.fillRect(Math.round(core.x - 3), Math.round(this.dY - 12), 6, 12);
-      ctx.fillStyle = pulse ? '#ffd147' : this.dPhase2Triggered ? '#F97316' : '#66F2FF';
+      ctx.fillStyle = pulse ? '#ffd147' : this.dPhase2Triggered ? '#ff7b24' : '#75f5ff';
       ctx.fillRect(Math.round(core.x - 2), Math.round(this.dY - 11), 4, 7);
       ctx.fillRect(Math.round(core.x - 2), Math.round(this.dY - 3), 4, 2);
 
       if (this.dAiState === 'p2_roar_nova_windup') {
-        ctx.strokeStyle = pulse ? '#EF4444' : '#FDE047';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(Math.round(core.x), Math.round(core.y), 46 + (pulse ? 8 : 0), 0, Math.PI * 2);
-        ctx.stroke();
+        this.drawPixelRing(
+          ctx,
+          core.x,
+          core.y,
+          46 + (pulse ? 8 : 0),
+          2,
+          pulse ? '#f03e52' : '#ffe066'
+        );
       }
     } else if (this.dAiState === 'stunned' || this.dAiState === 'ld_fake_stagger') {
       const core = this.getDragonCoreCenter();
@@ -5205,7 +5592,7 @@ export class PixelBattleEngine {
         const ang = this.elapsed * 8 + s * ((Math.PI * 2) / 3);
         const sx = Math.round(core.x + Math.cos(ang) * 16);
         const sy = Math.round(this.dY + 4 + Math.sin(ang) * 4);
-        ctx.fillStyle = urgentBait ? '#EF4444' : '#ffd147';
+        ctx.fillStyle = urgentBait ? '#f03e52' : '#ffd147';
         ctx.fillRect(sx, sy, 3, 3);
       }
     }
@@ -5226,7 +5613,7 @@ export class PixelBattleEngine {
     } else {
       if (this.wAwakened && this.wAwakeningTimer <= 0) {
         const auraPulse = Math.floor(this.elapsed * 18) % 2 === 0;
-        ctx.fillStyle = auraPulse ? 'rgba(250, 204, 21, 0.22)' : 'rgba(239, 68, 68, 0.24)';
+        ctx.fillStyle = auraPulse ? 'rgba(255, 210, 89, 0.22)' : 'rgba(240, 62, 82, 0.24)';
         ctx.fillRect(Math.round(this.wX + 4), Math.round(this.wY - 2), 24, 28);
       }
 
@@ -5273,22 +5660,21 @@ export class PixelBattleEngine {
         ctx.drawImage(wSource, 0, 0);
 
         if (this.wRollTimer <= 0 && this.wAwakeningTimer <= 1.15) {
-          const weaponSheet = this.getWeaponSprite(this.wWeapon);
+          const weaponSet = this.getWeaponSprite(this.wWeapon);
           if (this.wParryTimer > 0) {
             ctx.drawImage(this.sprites.weapons.shield.canvas, 20, 10);
           } else if (this.wAttackTimer > 0) {
-            ctx.save();
-            ctx.translate(22, 16);
-            if (WEAPON_SPECS[this.wWeapon].isThrust) {
-              ctx.rotate(1.57);
-              ctx.drawImage(weaponSheet.canvas, -6, -16);
-            } else {
-              ctx.rotate(this.wComboStep === 2 ? -0.45 : 0.78);
-              ctx.drawImage(weaponSheet.canvas, -2, -14);
-            }
-            ctx.restore();
+            // Crisp pre-baked nearest-neighbor weapon poses (zero ctx.rotate mixels!)
+            const atkSheet = WEAPON_SPECS[this.wWeapon].isThrust
+              ? weaponSet.thrust
+              : this.wComboStep === 2
+                ? weaponSet.swingUp
+                : weaponSet.swingDown;
+            const ox = WEAPON_SPECS[this.wWeapon].isThrust ? 12 : 11;
+            const oy = WEAPON_SPECS[this.wWeapon].isThrust ? 2 : 1;
+            ctx.drawImage(atkSheet.canvas, ox, oy);
           } else {
-            ctx.drawImage(weaponSheet.canvas, 14, 4);
+            ctx.drawImage(weaponSet.idle.canvas, 14, 4);
             ctx.drawImage(this.sprites.weapons.shield.canvas, 17, 13);
           }
         }
@@ -5298,14 +5684,14 @@ export class PixelBattleEngine {
           const px = drawX + (this.wFacing === 1 ? 29 : 1);
           ctx.fillStyle = '#ffd147';
           ctx.fillRect(px, drawY + 8, 2, 16);
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = '#fff5d6';
           ctx.fillRect(px + (this.wFacing === 1 ? 1 : 0), drawY + 10, 1, 12);
         }
 
         if (this.wDiveSlamming) {
           ctx.fillStyle = '#ffd147';
           ctx.fillRect(drawX + 10, drawY + 21, 12, 4);
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = '#fff5d6';
           ctx.fillRect(drawX + 13, drawY + 24, 6, 4);
         }
       }
@@ -5383,7 +5769,7 @@ export class PixelBattleEngine {
         const core = this.getDragonCoreCenter();
         const progress = Math.min(1, Math.max(0, 1 - this.dAiTimer / 1.4));
         const flashOn = Math.floor(this.elapsed * 26) % 2 === 0;
-        ctx.fillStyle = flashOn ? '#FEF08A' : '#F97316';
+        ctx.fillStyle = flashOn ? '#fff08a' : '#ff7b24';
         for (let k = 0; k < 5; k++) {
           const cx = Math.round(core.x - 14 + k * 7);
           const cy = Math.round(core.y - 10 + ((k * 7) % 16));
@@ -5392,13 +5778,16 @@ export class PixelBattleEngine {
         }
         if (this.dAiTimer <= 0.45) {
           const warnR = Math.round(24 + (1 - this.dAiTimer / 0.45) * 98);
-          ctx.strokeStyle = flashOn ? '#FEF08A' : '#F97316';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(Math.round(core.x), Math.round(core.y), warnR, 0, Math.PI * 2);
-          ctx.stroke();
+          this.drawPixelRing(
+            ctx,
+            core.x,
+            core.y,
+            warnR,
+            2,
+            flashOn ? '#fff08a' : '#ff7b24'
+          );
         } else if (progress > 0.2) {
-          ctx.fillStyle = 'rgba(249, 115, 22, 0.24)';
+          ctx.fillStyle = 'rgba(255, 123, 36, 0.24)';
           ctx.fillRect(Math.round(core.x - 18), Math.round(core.y - 18), 36, 36);
         }
       }
@@ -5408,20 +5797,20 @@ export class PixelBattleEngine {
         const whipDir = this.dFacing;
         const arcX = Math.round(core.x + whipDir * 24);
         const arcY = Math.round(core.y + 2);
-        ctx.fillStyle = this.dPhase2Triggered ? '#1A070B' : '#24112B';
+        ctx.fillStyle = this.dPhase2Triggered ? '#1d0b24' : '#1e1033';
         ctx.fillRect(arcX - 24, arcY - 6, 48, 8);
-        ctx.fillStyle = this.dPhase2Triggered ? '#EA580C' : '#FAF2E4';
+        ctx.fillStyle = this.dPhase2Triggered ? '#f26a21' : '#fff1d4';
         ctx.fillRect(arcX - 22, arcY - 4, 44, 4);
-        ctx.fillStyle = this.dPhase2Triggered ? '#FDE047' : '#66F2FF';
+        ctx.fillStyle = this.dPhase2Triggered ? '#ffe066' : '#75f5ff';
         ctx.fillRect(arcX + whipDir * 16 - 4, arcY - 5, 8, 6);
-        ctx.fillStyle = '#FFFFFF';
+        ctx.fillStyle = '#fff6d4';
         ctx.fillRect(arcX + whipDir * 16 - 2, arcY - 3, 4, 2);
       }
     }
   }
 
   private drawVfxAndLighting(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = 'rgba(205, 242, 242, 0.08)';
+    ctx.fillStyle = 'rgba(186, 224, 232, 0.06)';
     for (const bx of [170, 320, 490]) {
       for (let step = 0; step < 18; step++) {
         ctx.fillRect(bx - step * 3, 50 + step * 11, 22, 11);
@@ -5432,92 +5821,95 @@ export class PixelBattleEngine {
     ctx.globalCompositeOperation = 'lighter';
 
     if (this.wAwakened && this.wAwakeningTimer <= 0) {
-      const wx = this.wX + 16;
-      const wy = this.wY + 13;
-      const wGrad = ctx.createRadialGradient(wx, wy, 2, wx, wy, 26);
-      wGrad.addColorStop(0, 'rgba(250, 204, 21, 0.45)');
+      const wx = Math.round(this.wX + 16);
+      const wy = Math.round(this.wY + 13);
+      const wGrad = ctx.createRadialGradient(wx, wy, 2, wx, wy, 24);
+      wGrad.addColorStop(0, 'rgba(255, 210, 89, 0.36)');
       wGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = wGrad;
-      ctx.fillRect(wx - 26, wy - 26, 52, 52);
+      ctx.fillRect(wx - 24, wy - 24, 48, 48);
     }
 
     if (this.dAiState !== 'defeated' && this.dAiState !== 'blink_fade') {
       const chest = this.getDragonMouthOrChestPos();
       const tail = this.getDragonTailTipPos();
-      const pulseR = this.dFurious ? 38 + Math.sin(this.elapsed * 18) * 5 : this.dPhase2Triggered ? 28 + Math.sin(this.elapsed * 14) * 4 : 16;
+      const cx = Math.round(chest.x);
+      const cy = Math.round(chest.y);
+      const tx = Math.round(tail.x);
+      const ty = Math.round(tail.y);
+      const pulseR = Math.round(
+        this.dFurious ? 34 + Math.sin(this.elapsed * 18) * 4 : this.dPhase2Triggered ? 26 + Math.sin(this.elapsed * 14) * 3 : 15
+      );
 
-      const cGrad = ctx.createRadialGradient(chest.x, chest.y, 1, chest.x, chest.y, pulseR);
+      const cGrad = ctx.createRadialGradient(cx, cy, 1, cx, cy, pulseR);
       cGrad.addColorStop(
         0,
         this.dFurious
-          ? 'rgba(239, 68, 68, 0.72)'
+          ? 'rgba(240, 62, 82, 0.56)'
           : this.dPhase2Triggered
-            ? 'rgba(249, 115, 22, 0.6)'
-            : 'rgba(102, 242, 255, 0.35)'
+            ? 'rgba(255, 123, 36, 0.48)'
+            : 'rgba(117, 245, 255, 0.28)'
       );
       cGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = cGrad;
-      ctx.fillRect(chest.x - pulseR, chest.y - pulseR, pulseR * 2, pulseR * 2);
+      ctx.fillRect(cx - pulseR, cy - pulseR, pulseR * 2, pulseR * 2);
 
-      const tGrad = ctx.createRadialGradient(tail.x, tail.y, 1, tail.x, tail.y, 13);
+      const tGrad = ctx.createRadialGradient(tx, ty, 1, tx, ty, 12);
       tGrad.addColorStop(
         0,
-        this.dPhase2Triggered ? 'rgba(253, 224, 71, 0.5)' : 'rgba(102, 242, 255, 0.42)'
+        this.dPhase2Triggered ? 'rgba(255, 224, 102, 0.42)' : 'rgba(117, 245, 255, 0.34)'
       );
       tGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = tGrad;
-      ctx.fillRect(tail.x - 13, tail.y - 13, 26, 26);
+      ctx.fillRect(tx - 12, ty - 12, 24, 24);
     }
 
     if (this.wHp <= 0 && !this.wAwakeningTimer && this.wDeathTimer >= 0.2 && this.wDeathTimer < 1.05) {
-      const cx = this.wX + 16;
-      const cy = this.wY + 12;
-      const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, 24);
-      grad.addColorStop(0, 'rgba(104, 227, 255, 0.5)');
+      const cx = Math.round(this.wX + 16);
+      const cy = Math.round(this.wY + 12);
+      const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, 22);
+      grad.addColorStop(0, 'rgba(110, 242, 255, 0.42)');
       grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = grad;
-      ctx.fillRect(cx - 24, cy - 24, 48, 48);
+      ctx.fillRect(cx - 22, cy - 22, 44, 44);
     }
 
     for (const sh of this.shards) {
-      const grad = ctx.createRadialGradient(sh.x, sh.y, 1, sh.x, sh.y, 14);
+      const sx = Math.round(sh.x);
+      const sy = Math.round(sh.y);
+      const grad = ctx.createRadialGradient(sx, sy, 1, sx, sy, 12);
       grad.addColorStop(
         0,
         sh.reflected
-          ? 'rgba(255, 209, 71, 0.45)'
+          ? 'rgba(255, 209, 71, 0.36)'
           : sh.fiery
-            ? 'rgba(249, 115, 22, 0.5)'
-            : 'rgba(102, 242, 255, 0.45)'
+            ? 'rgba(255, 123, 36, 0.4)'
+            : 'rgba(117, 245, 255, 0.36)'
       );
       grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = grad;
-      ctx.fillRect(sh.x - 14, sh.y - 14, 28, 28);
+      ctx.fillRect(sx - 12, sy - 12, 24, 24);
     }
 
     if (this.slashSmear.active) {
-      const grad = ctx.createRadialGradient(
-        this.slashSmear.x,
-        this.slashSmear.y,
-        2,
-        this.slashSmear.x,
-        this.slashSmear.y,
-        18
-      );
+      const sx = Math.round(this.slashSmear.x);
+      const sy = Math.round(this.slashSmear.y);
+      const grad = ctx.createRadialGradient(sx, sy, 2, sx, sy, 16);
       grad.addColorStop(
         0,
         this.wAwakened
-          ? 'rgba(249, 115, 22, 0.5)'
+          ? 'rgba(255, 123, 36, 0.42)'
           : this.slashSmear.isCrit
-            ? 'rgba(255, 215, 80, 0.42)'
-            : 'rgba(102, 242, 255, 0.35)'
+            ? 'rgba(255, 215, 80, 0.36)'
+            : 'rgba(117, 245, 255, 0.28)'
       );
       grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = grad;
-      ctx.fillRect(this.slashSmear.x - 18, this.slashSmear.y - 18, 36, 36);
+      ctx.fillRect(sx - 16, sy - 16, 32, 32);
     }
     ctx.restore();
 
-    // Sweeping Fire Breath / Crystal Laser / Intersecting X-Beams
+    // Sweeping Fire Breath / Crystal Laser / Intersecting X-Beams (crisp stepped pixel beams!)
     if (
       this.dAiState === 'p1_beam_windup' ||
       this.dAiState === 'p2_beam_windup' ||
@@ -5526,17 +5918,22 @@ export class PixelBattleEngine {
       const isP2 = this.dAiState !== 'p1_beam_windup';
       const mouth = this.getDragonMouthOrChestPos();
       const len = isP2 ? 400 : 215;
-      ctx.strokeStyle = isP2 ? 'rgba(249, 115, 22, 0.58)' : 'rgba(102, 242, 255, 0.45)';
-      ctx.lineWidth = isP2 ? 3 : 1;
+      const teleColor = isP2 ? 'rgba(255, 123, 36, 0.56)' : 'rgba(117, 245, 255, 0.45)';
+      const teleWidth = isP2 ? 3 : 1;
       const angles =
         this.dAiState === 'ld_xbeam_windup'
           ? [this.dBeamStartAngle, this.ldXBeamStart2]
           : [this.dBeamStartAngle];
       for (const ang of angles) {
-        ctx.beginPath();
-        ctx.moveTo(Math.round(mouth.x), Math.round(mouth.y));
-        ctx.lineTo(Math.round(mouth.x + Math.cos(ang) * len), Math.round(mouth.y + Math.sin(ang) * len));
-        ctx.stroke();
+        this.drawPixelBeam(
+          ctx,
+          mouth.x,
+          mouth.y,
+          mouth.x + Math.cos(ang) * len,
+          mouth.y + Math.sin(ang) * len,
+          teleWidth,
+          teleColor
+        );
       }
     } else if (
       this.dAiState === 'p1_beam_sweep' ||
@@ -5556,26 +5953,33 @@ export class PixelBattleEngine {
         const endX = mouth.x + Math.cos(ang) * len;
         const endY = mouth.y + Math.sin(ang) * len;
 
-        ctx.strokeStyle = isP2 ? '#DC2626' : '#2252C9';
-        ctx.lineWidth = this.dAiState === 'ld_xbeam_sweep' ? 22 : isP2 ? 30 : 9;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(mouth.x), Math.round(mouth.y));
-        ctx.lineTo(Math.round(endX), Math.round(endY));
-        ctx.stroke();
-
-        ctx.strokeStyle = isP2 ? '#F97316' : '#66F2FF';
-        ctx.lineWidth = this.dAiState === 'ld_xbeam_sweep' ? 12 : isP2 ? 17 : 5;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(mouth.x), Math.round(mouth.y));
-        ctx.lineTo(Math.round(endX), Math.round(endY));
-        ctx.stroke();
-
-        ctx.strokeStyle = isP2 ? '#FEF08A' : '#FFFFFF';
-        ctx.lineWidth = isP2 ? 5 : 2;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(mouth.x), Math.round(mouth.y));
-        ctx.lineTo(Math.round(endX), Math.round(endY));
-        ctx.stroke();
+        this.drawPixelBeam(
+          ctx,
+          mouth.x,
+          mouth.y,
+          endX,
+          endY,
+          this.dAiState === 'ld_xbeam_sweep' ? 20 : isP2 ? 26 : 9,
+          isP2 ? '#cf2144' : '#2c41a8'
+        );
+        this.drawPixelBeam(
+          ctx,
+          mouth.x,
+          mouth.y,
+          endX,
+          endY,
+          this.dAiState === 'ld_xbeam_sweep' ? 11 : isP2 ? 15 : 5,
+          isP2 ? '#ff7b24' : '#75f5ff'
+        );
+        this.drawPixelBeam(
+          ctx,
+          mouth.x,
+          mouth.y,
+          endX,
+          endY,
+          isP2 ? 5 : 2,
+          isP2 ? '#fff08a' : '#fff6d4'
+        );
       }
     }
 
@@ -5584,9 +5988,9 @@ export class PixelBattleEngine {
       const tx = Math.round(this.ldSkyTargetX);
       const ty = Math.round(getBaseFloorYAt(tx));
       const flash = Math.floor(this.elapsed * 24) % 2 === 0;
-      ctx.fillStyle = flash ? 'rgba(250, 204, 21, 0.34)' : 'rgba(239, 68, 68, 0.34)';
+      ctx.fillStyle = flash ? 'rgba(255, 210, 89, 0.34)' : 'rgba(240, 62, 82, 0.34)';
       ctx.fillRect(tx - 18, ty - 160, 36, 160);
-      ctx.fillStyle = '#FACC15';
+      ctx.fillStyle = '#ffd25a';
       ctx.fillRect(tx - 24, ty - 3, 48, 3);
     }
 
@@ -5595,11 +5999,11 @@ export class PixelBattleEngine {
       const fx = Math.round(fp.x - fp.w / 2);
       const fy = Math.round(fp.y);
       const flicker = Math.floor(this.elapsed * 18) % 2 === 0;
-      ctx.fillStyle = '#DC2626';
+      ctx.fillStyle = '#cf2144';
       ctx.fillRect(fx, fy - 3, fp.w, 3);
-      ctx.fillStyle = flicker ? '#F97316' : '#EA580C';
+      ctx.fillStyle = flicker ? '#ff7b24' : '#e85a1a';
       ctx.fillRect(fx + 2, fy - 5, fp.w - 4, 3);
-      ctx.fillStyle = '#FEF08A';
+      ctx.fillStyle = '#fff08a';
       ctx.fillRect(fx + 5, fy - 6, Math.max(4, fp.w - 10), 2);
     }
 
@@ -5609,16 +6013,16 @@ export class PixelBattleEngine {
       const fy = Math.round(fp.y);
       const flicker = Math.floor(this.elapsed * 22) % 2 === 0;
       if (fp.warnTimer > 0) {
-        ctx.fillStyle = flicker ? '#FDE047' : '#EA580C';
+        ctx.fillStyle = flicker ? '#ffe066' : '#e85a1a';
         ctx.fillRect(fx - 12, fy - 3, 24, 3);
-        ctx.fillStyle = 'rgba(249, 115, 22, 0.25)';
+        ctx.fillStyle = 'rgba(255, 123, 36, 0.25)';
         ctx.fillRect(fx - 2, fy - 80, 4, 80);
       } else {
-        ctx.fillStyle = '#DC2626';
+        ctx.fillStyle = '#cf2144';
         ctx.fillRect(fx - 11, fy - 100, 22, 100);
-        ctx.fillStyle = flicker ? '#F97316' : '#EA580C';
+        ctx.fillStyle = flicker ? '#ff7b24' : '#e85a1a';
         ctx.fillRect(fx - 7, fy - 104, 14, 104);
-        ctx.fillStyle = '#FEF08A';
+        ctx.fillStyle = '#fff08a';
         ctx.fillRect(fx - 3, fy - 108, 6, 108);
       }
     }
@@ -5628,13 +6032,13 @@ export class PixelBattleEngine {
       const ox = Math.round(orb.x);
       const oy = Math.round(orb.y);
       const urgent = orb.fuse < 0.65 && Math.floor(this.elapsed * 22) % 2 === 0;
-      ctx.fillStyle = '#1A070B';
+      ctx.fillStyle = '#1d0b24';
       ctx.fillRect(ox - 6, oy - 6, 12, 12);
-      ctx.fillStyle = urgent ? '#FFFFFF' : '#DC2626';
+      ctx.fillStyle = urgent ? '#fff5d6' : '#cf2144';
       ctx.fillRect(ox - 5, oy - 5, 10, 10);
-      ctx.fillStyle = urgent ? '#FEF08A' : '#F97316';
+      ctx.fillStyle = urgent ? '#fff08a' : '#ff7b24';
       ctx.fillRect(ox - 3, oy - 3, 6, 6);
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = '#fff7d6';
       ctx.fillRect(ox - 1, oy - 1, 2, 2);
     }
 
@@ -5644,18 +6048,18 @@ export class PixelBattleEngine {
       const wy = Math.round(bw.y);
       if (bw.tall) {
         const flicker = Math.floor(this.elapsed * 22) % 2 === 0;
-        ctx.fillStyle = '#DC2626';
+        ctx.fillStyle = '#cf2144';
         ctx.fillRect(wx - 7, wy - 54, 14, 54);
-        ctx.fillStyle = flicker ? '#F97316' : '#EA580C';
+        ctx.fillStyle = flicker ? '#ff7b24' : '#e85a1a';
         ctx.fillRect(wx - 4, wy - 50, 8, 50);
-        ctx.fillStyle = '#FEF08A';
+        ctx.fillStyle = '#fff08a';
         ctx.fillRect(wx - 2, wy - 44, 4, 44);
       } else {
-        ctx.fillStyle = '#DC2626';
+        ctx.fillStyle = '#cf2144';
         ctx.fillRect(wx - 4, wy - 11, 8, 22);
-        ctx.fillStyle = '#F97316';
+        ctx.fillStyle = '#ff7b24';
         ctx.fillRect(wx - 2, wy - 9, 4, 18);
-        ctx.fillStyle = '#FEF08A';
+        ctx.fillStyle = '#fff08a';
         ctx.fillRect(wx - 1, wy - 6, 2, 12);
       }
     }
@@ -5666,9 +6070,9 @@ export class PixelBattleEngine {
         const bx = Math.round(bolt.x);
         ctx.fillStyle = '#a855f7';
         ctx.fillRect(bx - 4, 40, 8, 240);
-        ctx.fillStyle = '#facc15';
+        ctx.fillStyle = '#ffd25a';
         ctx.fillRect(bx - 2, 40, 4, 240);
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = '#fff7d6';
         ctx.fillRect(bx - 1, 40, 2, 240);
       }
     }
@@ -5677,11 +6081,11 @@ export class PixelBattleEngine {
     for (const sw of this.slashWaves) {
       const sx = Math.round(sw.x);
       const sy = Math.round(sw.y);
-      ctx.fillStyle = this.activeBuff === 'blade_flurry' ? '#38BDF8' : '#F97316';
+      ctx.fillStyle = this.activeBuff === 'blade_flurry' ? '#4ec5ff' : '#ff7b24';
       ctx.fillRect(sx - 3, sy - 9, 6, 18);
-      ctx.fillStyle = this.activeBuff === 'blade_flurry' ? '#E0F2FE' : '#FDE047';
+      ctx.fillStyle = this.activeBuff === 'blade_flurry' ? '#d9f4ff' : '#ffe066';
       ctx.fillRect(sx - 2, sy - 7, 4, 14);
-      ctx.fillStyle = '#FFFFFF';
+      ctx.fillStyle = '#fff7d6';
       ctx.fillRect(sx - 1, sy - 5, 2, 10);
     }
 
@@ -5693,11 +6097,11 @@ export class PixelBattleEngine {
       const spec = WEAPON_SPECS[this.slashSmear.weapon];
 
       const outerColor = this.wAwakened
-        ? '#F97316'
+        ? '#ff7b24'
         : this.slashSmear.isCrit
           ? '#ffd147'
           : spec.smearColor;
-      const innerColor = this.wAwakened ? '#FEF08A' : '#ffffff';
+      const innerColor = this.wAwakened ? '#fff08a' : '#fff6d4';
 
       if (spec.isThrust) {
         const len = Math.round(spec.reach * (0.75 + 0.25 * (1 - p)));
@@ -5729,7 +6133,7 @@ export class PixelBattleEngine {
       ctx.fillStyle = sw.color;
       ctx.fillRect(Math.round(sw.x - r), Math.round(sw.y - 3), 5, 3);
       ctx.fillRect(Math.round(sw.x + r - 5), Math.round(sw.y - 3), 5, 3);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#fff5d6';
       ctx.fillRect(Math.round(sw.x - r + 2), Math.round(sw.y - 5), 2, 2);
       ctx.fillRect(Math.round(sw.x + r - 4), Math.round(sw.y - 5), 2, 2);
     }
@@ -5737,13 +6141,13 @@ export class PixelBattleEngine {
     for (const sh of this.shards) {
       const fx = Math.round(sh.x);
       const fy = Math.round(sh.y);
-      ctx.fillStyle = sh.fiery ? '#1A070B' : '#24112B';
+      ctx.fillStyle = sh.fiery ? '#1d0b24' : '#1e1033';
       ctx.fillRect(fx - 5, fy - 4, 10, 8);
-      ctx.fillStyle = sh.reflected ? '#f59e0b' : sh.fiery ? '#DC2626' : '#2252C9';
+      ctx.fillStyle = sh.reflected ? '#f59e0b' : sh.fiery ? '#cf2144' : '#2c41a8';
       ctx.fillRect(fx - 4, fy - 3, 8, 6);
-      ctx.fillStyle = sh.reflected ? '#ffd147' : sh.fiery ? '#F97316' : '#66F2FF';
+      ctx.fillStyle = sh.reflected ? '#ffd147' : sh.fiery ? '#ff7b24' : '#75f5ff';
       ctx.fillRect(fx - 3, fy - 2, 6, 4);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#fff6d4';
       ctx.fillRect(fx - 1, fy - 1, 2, 2);
     }
 
@@ -5765,31 +6169,38 @@ export class PixelBattleEngine {
     color: string,
     scale = 2
   ): void {
-    const charW = 4 * scale;
-    const totalW = text.length * charW;
-    let cursorX = centerX - Math.floor(totalW / 2);
+    // True 1:1 virtual-texel bitmap glyphs (5x7 normal, 7x9 bold crits) — ZERO mixels!
+    const isCrit = scale > 2;
+    const glyphs = isCrit ? PIXEL_GLYPHS_7X9 : PIXEL_GLYPHS_5X7;
+    const gw = isCrit ? 7 : 5;
+    const gh = isCrit ? 9 : 7;
+    const adv = gw + 1;
+    const totalW = text.length * adv - 1;
+    let cursorX = Math.round(centerX - Math.floor(totalW / 2));
+    const iy = Math.round(y);
 
     for (const ch of text) {
-      const glyph = PIXEL_GLYPHS[ch];
+      const glyph = glyphs[ch];
       if (!glyph) continue;
-      ctx.fillStyle = '#140c16';
-      for (let gy = 0; gy < 5; gy++) {
-        for (let gx = 0; gx < 3; gx++) {
+
+      ctx.fillStyle = '#1b102b';
+      for (let gy = 0; gy < gh; gy++) {
+        for (let gx = 0; gx < gw; gx++) {
           if (glyph[gy][gx] === '1') {
-            ctx.fillRect(cursorX + gx * scale - 1, y + gy * scale, scale + 2, scale + 1);
-            ctx.fillRect(cursorX + gx * scale, y + gy * scale - 1, scale, scale + 2);
+            ctx.fillRect(cursorX + gx - 1, iy + gy, 3, 1);
+            ctx.fillRect(cursorX + gx, iy + gy - 1, 1, 3);
           }
         }
       }
       ctx.fillStyle = color;
-      for (let gy = 0; gy < 5; gy++) {
-        for (let gx = 0; gx < 3; gx++) {
+      for (let gy = 0; gy < gh; gy++) {
+        for (let gx = 0; gx < gw; gx++) {
           if (glyph[gy][gx] === '1') {
-            ctx.fillRect(cursorX + gx * scale, y + gy * scale, scale, scale);
+            ctx.fillRect(cursorX + gx, iy + gy, 1, 1);
           }
         }
       }
-      cursorX += charW;
+      cursorX += adv;
     }
   }
 }
