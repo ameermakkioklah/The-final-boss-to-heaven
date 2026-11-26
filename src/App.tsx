@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, type User } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -34,6 +34,7 @@ import {
   type Language,
 } from './game/types';
 import {
+  fetchOnlinePlayerProfile,
   formatDurationMs,
   generateLocalPlayerId,
   loadActiveSession,
@@ -333,6 +334,7 @@ export default function App() {
   const [regModalOpen, setRegModalOpen] = useState<boolean>(() => !loadActiveSession());
   const [isRegistering, setIsRegistering] = useState(false);
   const [regError, setRegError] = useState<string | null>(null);
+  const [regNotice, setRegNotice] = useState<string | null>(null);
 
   // Live Firestore Leaderboard & Local Session State
   const [onlinePlayers, setOnlinePlayers] = useState<PlayerProfileRecord[]>([]);
@@ -390,12 +392,34 @@ export default function App() {
 
   const t = COPY[lang];
 
-  // Subscribe to Firebase Auth state
+  // Subscribe to Firebase Auth state & auto-restore existing Firestore player profile
   useEffect(() => {
+    let active = true;
     const unsub = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
+      if (!user) return;
+      void fetchOnlinePlayerProfile(user.uid)
+        .then((profile) => {
+          if (!active || !profile) return;
+          const restored: ActivePlayerSession = {
+            playerId: profile.uid,
+            playerName: profile.playerName,
+            mode: 'online',
+          };
+          saveActiveSession(restored);
+          setActiveSession(restored);
+          setRegNotice(null);
+          setRegError(null);
+          setRegModalOpen(false);
+        })
+        .catch(() => {
+          // Handled during explicit sign-in if network or rules fail
+        });
     });
-    return () => unsub();
+    return () => {
+      active = false;
+      unsub();
+    };
   }, []);
 
   // Subscribe to real-time Firestore Leaderboard & Recent Matches Feed
@@ -555,10 +579,67 @@ export default function App() {
     engine.setPaused(gameState === 'PAUSED');
   }, [gameState]);
 
+  const handleGoogleSignInRestore = useCallback(async () => {
+    setIsRegistering(true);
+    setRegError(null);
+    setRegNotice(null);
+    try {
+      let user = auth.currentUser;
+      if (!user) {
+        const cred = await signInWithPopup(auth, googleProvider);
+        user = cred.user;
+      }
+      const existing = await fetchOnlinePlayerProfile(user.uid);
+      if (existing) {
+        const restored: ActivePlayerSession = {
+          playerId: existing.uid,
+          playerName: existing.playerName,
+          mode: 'online',
+        };
+        saveActiveSession(restored);
+        setActiveSession(restored);
+        setRegModalOpen(false);
+      } else {
+        setRegNotice(
+          lang === 'ar'
+            ? 'تم ربط حساب Google! اختر اسم المحارب أدناه لحفظ ملفك الجديد.'
+            : 'Google account connected! Choose a Warrior Callsign below to create your new profile.',
+        );
+      }
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Unable to sign in with Google.';
+      try {
+        const parsed = JSON.parse(raw) as { error?: string };
+        setRegError(parsed?.error || raw);
+      } catch {
+        setRegError(raw);
+      }
+    } finally {
+      setIsRegistering(false);
+    }
+  }, [lang]);
+
+  const handleGoogleSignOut = useCallback(async () => {
+    setIsRegistering(true);
+    setRegError(null);
+    setRegNotice(null);
+    try {
+      await signOut(auth);
+      saveActiveSession(null);
+      setActiveSession(null);
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Unable to sign out.';
+      setRegError(raw);
+    } finally {
+      setIsRegistering(false);
+    }
+  }, []);
+
   const handleOnlineRegister = useCallback(
     async (cleanedName: string) => {
       setIsRegistering(true);
       setRegError(null);
+      setRegNotice(null);
       try {
         let user = auth.currentUser;
         if (!user) {
@@ -1565,13 +1646,21 @@ export default function App() {
         initialName={activeSession?.playerName || ''}
         isGoogleSignedIn={Boolean(firebaseUser)}
         currentUid={firebaseUser?.uid || null}
+        googleEmail={firebaseUser?.email || null}
         existingPlayers={onlinePlayers}
         canDismiss={Boolean(activeSession)}
         isSubmitting={isRegistering}
         submitError={regError}
+        infoNotice={regNotice}
+        onGoogleSignInRestore={handleGoogleSignInRestore}
+        onGoogleSignOut={handleGoogleSignOut}
         onSubmitOnline={handleOnlineRegister}
         onSubmitLocal={handleLocalRegister}
-        onClose={() => setRegModalOpen(false)}
+        onClose={() => {
+          setRegNotice(null);
+          setRegError(null);
+          setRegModalOpen(false);
+        }}
       />
     </div>
   );

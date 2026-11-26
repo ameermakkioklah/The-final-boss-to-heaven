@@ -412,6 +412,38 @@ export function subscribeRecentMatches(
   );
 }
 
+export async function fetchOnlinePlayerProfile(
+  uid: string,
+): Promise<PlayerProfileRecord | null> {
+  const path = `players/${uid}`;
+  const playerRef = doc(db, 'players', uid);
+
+  let snap;
+  try {
+    snap = await getDoc(playerRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  if (!snap.exists()) return null;
+  const data = snap.data();
+  return {
+    uid: String(data.uid || uid),
+    playerName: String(data.playerName || 'Warrior'),
+    playerNameLower: String(data.playerNameLower || String(data.playerName || '').toLowerCase()),
+    dragonKills: Number(data.dragonKills || 0),
+    matchesPlayed: Number(data.matchesPlayed || 0),
+    wins: Number(data.wins || 0),
+    losses: Number(data.losses || 0),
+    bestTimeMs: typeof data.bestTimeMs === 'number' ? data.bestTimeMs : null,
+    lastOutcome:
+      data.lastOutcome === 'win' || data.lastOutcome === 'loss' ? data.lastOutcome : 'none',
+    lastDurationMs: Number(data.lastDurationMs || 0),
+    createdAtMs: tsToMs(data.createdAt),
+    updatedAtMs: tsToMs(data.updatedAt),
+  };
+}
+
 export async function registerOrUpdateOnlinePlayer(
   uid: string,
   rawName: string,
