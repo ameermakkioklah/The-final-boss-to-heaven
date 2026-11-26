@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express, { type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -11,7 +12,14 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-// Lazy-initialized shared Gemini client following @google/genai server guidelines
+// Persistent on-disk WAV cache so each line is only synthesized once across restarts
+const VOICE_CACHE_DIR = path.resolve(__dirname, '.voice-cache');
+try {
+  fs.mkdirSync(VOICE_CACHE_DIR, { recursive: true });
+} catch {
+  // Non-fatal if filesystem is read-only; in-memory cache still applies
+}
+
 let cachedAi: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -34,6 +42,7 @@ function getGeminiClient(): GoogleGenAI {
 interface VoicePromptSpec {
   voiceName: 'Charon' | 'Fenrir';
   scriptedText: string;
+  plainText: string;
   style: string;
 }
 
@@ -57,6 +66,7 @@ function buildVoicePrompt(params: {
       return {
         voiceName: 'Charon',
         scriptedText: '<breath> I... <gasp> I c-can do this... <breath>',
+        plainText: 'I... I c-can do this...',
         style: `${WARRIOR_BASE_STYLE} Exhausted and stammering: slow, breathless, hesitant breaks between syllables, strained vocal cords, slight tremor, heavy ragged exhale.`,
       };
     }
@@ -65,6 +75,8 @@ function buildVoicePrompt(params: {
         voiceName: 'Charon',
         scriptedText:
           'Only one left... <breath> and I can finally break free from this reality. I will end him.',
+        plainText:
+          'Only one left... and I can finally break free from this reality. I will end him.',
         style: `${WARRIOR_BASE_STYLE} Grim resolve: strained and low, pushing through pain, labored breathing carrying a quiet spark of stubbornness and defiance.`,
       };
     }
@@ -72,6 +84,7 @@ function buildVoicePrompt(params: {
       return {
         voiceName: 'Charon',
         scriptedText: '<laugh> <breath> Do you think I give up that easily?',
+        plainText: 'Heh... Do you think I give up that easily?',
         style: `${WARRIOR_BASE_STYLE} Defiant recovery: a tired, raspy, bruised chuckle turning into gritty low-pitched determination.`,
       };
     }
@@ -79,12 +92,14 @@ function buildVoicePrompt(params: {
       return {
         voiceName: 'Charon',
         scriptedText: 'I... <breath> won...',
+        plainText: 'I... won...',
         style: `${WARRIOR_BASE_STYLE} Faint victory: very quiet, trembling, wounded, barely above a ragged exhausted whisper.`,
       };
     }
     return {
       voiceName: 'Charon',
       scriptedText: text,
+      plainText: text,
       style: WARRIOR_BASE_STYLE,
     };
   }
@@ -94,6 +109,7 @@ function buildVoicePrompt(params: {
     return {
       voiceName: 'Fenrir',
       scriptedText: '<laugh> How pathetic... I pity you. All this... for what?',
+      plainText: 'How pathetic... I pity you. All this... for what?',
       style: `${DRAGON_BASE_STYLE} Opens with a deep, booming, menacing laugh echoing with dark amusement and cruelty, then slow, condescending, mocking pity treating the warrior like an insignificant insect.`,
     };
   }
@@ -101,6 +117,7 @@ function buildVoicePrompt(params: {
     return {
       voiceName: 'Fenrir',
       scriptedText: 'Die!',
+      plainText: 'Die!',
       style: `${DRAGON_BASE_STYLE} Sudden lethal strike: fast, sharp, explosive, vicious snarl with brutal aggressive bite.`,
     };
   }
@@ -108,6 +125,7 @@ function buildVoicePrompt(params: {
     return {
       voiceName: 'Fenrir',
       scriptedText: '<laugh> How utterly pathetic.',
+      plainText: 'How utterly pathetic.',
       style: `${DRAGON_BASE_STYLE} Victory over the warrior after devouring him: loud cruel laugh followed by haughty, cold, supreme narcissistic arrogance.`,
     };
   }
@@ -115,16 +133,72 @@ function buildVoicePrompt(params: {
   return {
     voiceName: 'Fenrir',
     scriptedText: text,
+    plainText: text,
     style: isBanter
       ? `${DRAGON_BASE_STYLE} Mid-fight arrogant banter: cold, narcissistic, boastful, belittling—speaking like an untouchable apex predator.`
       : DRAGON_BASE_STYLE,
   };
 }
 
-// Bounded server-side WAV cache & in-flight deduplication
 const MAX_VOICE_CACHE = 64;
 const voiceWavCache = new Map<string, string>();
 const inFlightVoiceRequests = new Map<string, Promise<string>>();
+
+function getDiskCachePath(cacheKey: string): string {
+  const hash = crypto.createHash('sha1').update(cacheKey).digest('hex').slice(0, 16);
+  const safePrefix = cacheKey
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .slice(0, 36);
+  return path.join(VOICE_CACHE_DIR, `${safePrefix}_${hash}.wav`);
+}
+
+function isQuotaError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+}
+
+async function callGeminiTtsModel(
+  ai: GoogleGenAI,
+  model: 'gemini-3.8-flash-tts' | 'gemini-3.8-flash-lite-tts',
+  spec: VoicePromptSpec,
+): Promise<string> {
+  const textToSpeak = model === 'gemini-3.8-flash-tts' ? spec.scriptedText : spec.plainText;
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: textToSpeak,
+            speechMetadata: {
+              style: spec.style,
+            },
+          },
+        ],
+      },
+    ],
+    config: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: spec.voiceName,
+          },
+        },
+      },
+    },
+  });
+
+  const parts = response.candidates?.[0]?.content?.parts ?? [];
+  const audioPart = parts.find((p) => p.inlineData?.data);
+  const base64Audio = audioPart?.inlineData?.data;
+  if (!base64Audio) {
+    throw new Error(`${model} returned no audio payload.`);
+  }
+  return base64Audio;
+}
 
 async function synthesizeCueWavBase64(params: {
   cueId: string;
@@ -134,8 +208,23 @@ async function synthesizeCueWavBase64(params: {
   isBanter?: boolean;
 }): Promise<string> {
   const cacheKey = `${params.speaker}:${params.cueId}:${params.text}`;
-  const cached = voiceWavCache.get(cacheKey);
-  if (cached) return cached;
+
+  const memCached = voiceWavCache.get(cacheKey);
+  if (memCached) return memCached;
+
+  const diskPath = getDiskCachePath(cacheKey);
+  try {
+    if (fs.existsSync(diskPath)) {
+      const wavBuf = fs.readFileSync(diskPath);
+      if (wavBuf.length > 44) {
+        const b64 = wavBuf.toString('base64');
+        voiceWavCache.set(cacheKey, b64);
+        return b64;
+      }
+    }
+  } catch {
+    // Fall through to live API synthesis
+  }
 
   const existingPromise = inFlightVoiceRequests.get(cacheKey);
   if (existingPromise) return existingPromise;
@@ -144,38 +233,16 @@ async function synthesizeCueWavBase64(params: {
     const ai = getGeminiClient();
     const spec = buildVoicePrompt(params);
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash-tts',
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: spec.scriptedText,
-              speechMetadata: {
-                style: spec.style,
-              },
-            },
-          ],
-        },
-      ],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: spec.voiceName,
-            },
-          },
-        },
-      },
-    });
-
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    const audioPart = parts.find((p) => p.inlineData?.data);
-    const base64Audio = audioPart?.inlineData?.data;
-    if (!base64Audio) {
-      throw new Error('Voice synthesis returned no audio payload.');
+    let base64Audio: string;
+    try {
+      base64Audio = await callGeminiTtsModel(ai, 'gemini-3.8-flash-tts', spec);
+    } catch (err) {
+      if (isQuotaError(err)) {
+        // Fall back to high-throughput gemini-3.8-flash-lite-tts if flash-tts daily quota is exhausted
+        base64Audio = await callGeminiTtsModel(ai, 'gemini-3.8-flash-lite-tts', spec);
+      } else {
+        throw err;
+      }
     }
 
     if (voiceWavCache.size >= MAX_VOICE_CACHE) {
@@ -183,6 +250,13 @@ async function synthesizeCueWavBase64(params: {
       if (oldestKey) voiceWavCache.delete(oldestKey);
     }
     voiceWavCache.set(cacheKey, base64Audio);
+
+    try {
+      fs.writeFileSync(diskPath, Buffer.from(base64Audio, 'base64'));
+    } catch {
+      // Ignore disk cache write issues
+    }
+
     return base64Audio;
   })();
 
@@ -245,7 +319,7 @@ async function startServer() {
       const status =
         message.includes('not configured')
           ? 503
-          : message.includes('429') || message.includes('RESOURCE_EXHAUSTED')
+          : isQuotaError(err)
             ? 429
             : 500;
       res.status(status).json({ error: message });

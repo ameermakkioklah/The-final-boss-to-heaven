@@ -1,5 +1,6 @@
 import {
   CORE_CUTSCENE_VOICE_CUES,
+  loadCutsceneFlags,
   type CutsceneSfxHook,
   type DialogueCue,
 } from './cutscene';
@@ -14,16 +15,28 @@ function decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+export interface VoicePlaybackCallbacks {
+  onStarted?: (cueId: string, durationSec?: number) => void;
+  onEnded?: (cueId: string) => void;
+  onError?: (message: string) => void;
+}
+
+interface FetchResult {
+  buffer: ArrayBuffer | null;
+  error?: string;
+}
+
 export class CutsceneVoiceController {
   private muted = false;
   private audioCtx: AudioContext | null = null;
   private bufferCache = new Map<string, AudioBuffer>();
   private rawCache = new Map<string, ArrayBuffer>();
-  private inFlightFetches = new Map<string, Promise<ArrayBuffer | null>>();
+  private inFlightFetches = new Map<string, Promise<FetchResult>>();
   private activeSource: AudioBufferSourceNode | null = null;
   private activeCueNonce = 0;
   private preloaded = false;
   private voiceApiDisabled = false;
+  private lastVoiceError: string | null = null;
 
   private ensureAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -44,6 +57,10 @@ export class CutsceneVoiceController {
     return `${cue.speaker}:${cue.id}:${cue.text}`;
   }
 
+  public getLastVoiceError(): string | null {
+    return this.lastVoiceError;
+  }
+
   public setMuted(muted: boolean): void {
     this.muted = muted;
     if (muted) {
@@ -55,6 +72,7 @@ export class CutsceneVoiceController {
     this.activeCueNonce += 1;
     if (this.activeSource) {
       try {
+        this.activeSource.onended = null;
         this.activeSource.stop();
         this.activeSource.disconnect();
       } catch {
@@ -62,25 +80,18 @@ export class CutsceneVoiceController {
       }
       this.activeSource = null;
     }
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // Ignore speech synthesis cancellation errors
-      }
-    }
   }
 
   public preloadCutsceneVoices(): void {
     if (this.preloaded || this.voiceApiDisabled || typeof window === 'undefined') return;
     this.preloaded = true;
-    // Warm up intro + ending voice lines sequentially in the background
-    void (async () => {
-      for (const cue of CORE_CUTSCENE_VOICE_CUES) {
-        if (this.voiceApiDisabled) break;
-        await this.fetchOrGetRawWav(cue);
-      }
-    })();
+
+    // Only preload opening intro lines when the player has not seen the intro yet, preserving TTS quota
+    const flags = loadCutsceneFlags();
+    if (flags.hasSeenIntroCutscene) return;
+
+    const priorityCues = CORE_CUTSCENE_VOICE_CUES.slice(0, 3);
+    void Promise.allSettled(priorityCues.map((cue) => this.fetchAndDecodeCue(cue)));
   }
 
   public triggerSfx(hook: CutsceneSfxHook): void {
@@ -112,8 +123,16 @@ export class CutsceneVoiceController {
     }
   }
 
-  public speakDialogue(cue: DialogueCue | null): void {
-    if (!cue || this.muted) return;
+  public speakDialogue(cue: DialogueCue | null, callbacks?: VoicePlaybackCallbacks): void {
+    if (!cue) return;
+
+    if (this.muted) {
+      callbacks?.onStarted?.(cue.id, cue.durationSec);
+      globalThis.setTimeout(() => {
+        callbacks?.onEnded?.(cue.id);
+      }, Math.round(cue.durationSec * 1000));
+      return;
+    }
 
     if (cue.isBanter) {
       sound.playDragonSnarl(false);
@@ -122,19 +141,47 @@ export class CutsceneVoiceController {
     this.stopSpeech();
     const myNonce = ++this.activeCueNonce;
 
-    void this.playGeminiVoiceOrFallback(cue, myNonce);
+    void this.playGeminiVoice(cue, myNonce, callbacks);
   }
 
-  private async fetchOrGetRawWav(cue: DialogueCue): Promise<ArrayBuffer | null> {
-    if (this.voiceApiDisabled) return null;
+  private async fetchAndDecodeCue(
+    cue: DialogueCue,
+  ): Promise<{ buffer: AudioBuffer | null; error?: string }> {
+    const key = this.getCacheKey(cue);
+    const cachedBuf = this.bufferCache.get(key);
+    if (cachedBuf) return { buffer: cachedBuf };
+
+    const result = await this.fetchOrGetRawWav(cue);
+    if (!result.buffer) {
+      return { buffer: null, error: result.error };
+    }
+
+    const ctx = this.ensureAudioContext();
+    if (!ctx) {
+      return { buffer: null, error: 'Web Audio API unavailable.' };
+    }
+
+    try {
+      const decoded = await ctx.decodeAudioData(result.buffer.slice(0));
+      this.bufferCache.set(key, decoded);
+      return { buffer: decoded };
+    } catch {
+      return { buffer: null, error: 'Failed to decode voice WAV.' };
+    }
+  }
+
+  private async fetchOrGetRawWav(cue: DialogueCue): Promise<FetchResult> {
+    if (this.voiceApiDisabled) {
+      return { buffer: null, error: this.lastVoiceError || 'Voice API disabled.' };
+    }
     const key = this.getCacheKey(cue);
     const cachedRaw = this.rawCache.get(key);
-    if (cachedRaw) return cachedRaw;
+    if (cachedRaw) return { buffer: cachedRaw };
 
     const existing = this.inFlightFetches.get(key);
     if (existing) return existing;
 
-    const promise = (async () => {
+    const promise = (async (): Promise<FetchResult> => {
       try {
         const resp = await fetch('/api/voice', {
           method: 'POST',
@@ -148,19 +195,35 @@ export class CutsceneVoiceController {
           }),
         });
         if (!resp.ok) {
-          if (resp.status === 503) {
-            // Server does not have GEMINI_API_KEY configured; avoid retrying every line
-            this.voiceApiDisabled = true;
+          let errMsg = `Voice server returned HTTP ${resp.status}`;
+          try {
+            const errJson = (await resp.json()) as { error?: string };
+            if (errJson?.error) errMsg = errJson.error;
+          } catch {
+            // Keep default HTTP message
           }
-          return null;
+          if (resp.status === 503 || resp.status === 429) {
+            this.lastVoiceError =
+              resp.status === 429
+                ? 'Gemini TTS daily quota reached (429). Check Settings > Secrets for a billing-enabled API key or try again after quota resets.'
+                : errMsg;
+            if (resp.status === 503) {
+              this.voiceApiDisabled = true;
+            }
+          }
+          return { buffer: null, error: this.lastVoiceError || errMsg };
         }
+
         const json = (await resp.json()) as { audioBase64?: string };
-        if (!json.audioBase64) return null;
+        if (!json.audioBase64) {
+          return { buffer: null, error: 'Empty audio payload.' };
+        }
         const buf = decodeBase64ToArrayBuffer(json.audioBase64);
         this.rawCache.set(key, buf);
-        return buf;
+        this.lastVoiceError = null;
+        return { buffer: buf };
       } catch {
-        return null;
+        return { buffer: null, error: 'Network error reaching voice service.' };
       } finally {
         this.inFlightFetches.delete(key);
       }
@@ -170,36 +233,41 @@ export class CutsceneVoiceController {
     return promise;
   }
 
-  private async playGeminiVoiceOrFallback(cue: DialogueCue, nonce: number): Promise<void> {
-    const key = this.getCacheKey(cue);
+  private async playGeminiVoice(
+    cue: DialogueCue,
+    nonce: number,
+    callbacks?: VoicePlaybackCallbacks,
+  ): Promise<void> {
     const ctx = this.ensureAudioContext();
-
-    if (ctx) {
-      let decoded = this.bufferCache.get(key);
-      if (!decoded) {
-        const raw = await this.fetchOrGetRawWav(cue);
-        if (this.muted || nonce !== this.activeCueNonce) return;
-        if (raw) {
-          try {
-            // decodeAudioData detaches the passed ArrayBuffer, so slice a fresh copy
-            decoded = await ctx.decodeAudioData(raw.slice(0));
-            this.bufferCache.set(key, decoded);
-          } catch {
-            decoded = undefined;
-          }
-        }
-      }
-
-      if (this.muted || nonce !== this.activeCueNonce) return;
-
-      if (decoded) {
-        this.playProcessedAudioBuffer(ctx, decoded, cue);
-        return;
+    if (ctx && ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch {
+        // Ignore resume rejection
       }
     }
 
-    if (!this.muted && nonce === this.activeCueNonce) {
-      this.speakFallbackSpeechSynthesis(cue);
+    if (ctx) {
+      const { buffer, error } = await this.fetchAndDecodeCue(cue);
+      if (this.muted || nonce !== this.activeCueNonce) return;
+
+      if (buffer) {
+        this.playProcessedAudioBuffer(ctx, buffer, cue, nonce, callbacks);
+        return;
+      }
+      if (error) {
+        callbacks?.onError?.(error);
+      }
+    }
+
+    // Never fall back to robotic browser speechSynthesis; keep subtitles timed cleanly with SFX cues
+    if (nonce === this.activeCueNonce) {
+      callbacks?.onStarted?.(cue.id, cue.durationSec);
+      globalThis.setTimeout(() => {
+        if (nonce === this.activeCueNonce) {
+          callbacks?.onEnded?.(cue.id);
+        }
+      }, Math.round(cue.durationSec * 1000));
     }
   }
 
@@ -207,6 +275,8 @@ export class CutsceneVoiceController {
     ctx: AudioContext,
     buffer: AudioBuffer,
     cue: DialogueCue,
+    nonce: number,
+    callbacks?: VoicePlaybackCallbacks,
   ): void {
     try {
       const source = ctx.createBufferSource();
@@ -214,8 +284,7 @@ export class CutsceneVoiceController {
 
       const masterGain = ctx.createGain();
       if (cue.speaker === 'warrior') {
-        // Close-mic raw vocal performance with subtle low chest grit & minimal room reverb
-        masterGain.gain.value = cue.delivery === 'tremble' ? 0.72 : 0.96;
+        masterGain.gain.value = cue.delivery === 'tremble' ? 0.74 : 0.96;
 
         const lowGrit = ctx.createBiquadFilter();
         lowGrit.type = 'lowshelf';
@@ -232,8 +301,7 @@ export class CutsceneVoiceController {
         breathClarity.connect(masterGain);
         masterGain.connect(ctx.destination);
       } else {
-        // Monstrous cavernous bass presence + tight filtered cave slapback for intelligibility
-        masterGain.gain.value = cue.isBanter ? 0.74 : 0.95;
+        masterGain.gain.value = cue.isBanter ? 0.76 : 0.95;
 
         const bassBoost = ctx.createBiquadFilter();
         bassBoost.type = 'lowshelf';
@@ -246,7 +314,6 @@ export class CutsceneVoiceController {
         clarityPeak.Q.value = 1.1;
         clarityPeak.gain.value = 2.0;
 
-        // Subtle cavernous reflection so every English word stays crisp
         const cavernDelay = ctx.createDelay(0.25);
         cavernDelay.delayTime.value = 0.068;
         const cavernFilter = ctx.createBiquadFilter();
@@ -271,53 +338,19 @@ export class CutsceneVoiceController {
         if (this.activeSource === source) {
           this.activeSource = null;
         }
+        if (nonce === this.activeCueNonce) {
+          callbacks?.onEnded?.(cue.id);
+        }
       };
+
       this.activeSource = source;
       source.start(0);
+      callbacks?.onStarted?.(cue.id, buffer.duration);
     } catch {
-      this.speakFallbackSpeechSynthesis(cue);
-    }
-  }
-
-  private speakFallbackSpeechSynthesis(cue: DialogueCue): void {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return;
-    }
-
-    try {
-      const synth = window.speechSynthesis;
-      synth.cancel();
-
-      const utter = new SpeechSynthesisUtterance(cue.text);
-      utter.lang = 'en-US';
-
-      const voices = synth.getVoices();
-      const englishVoices = voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
-      const preferredMale =
-        englishVoices.find((v) =>
-          /david|daniel|mark|george|alex|fred|arthur|ryan|guy/i.test(v.name),
-        ) || englishVoices[0];
-      if (preferredMale) {
-        utter.voice = preferredMale;
-      }
-
-      if (cue.speaker === 'dragon') {
-        utter.pitch = 0.52;
-        utter.rate = cue.id === 'dragon_die' ? 1.12 : 0.82;
-        utter.volume = cue.isBanter ? 0.55 : 0.85;
-      } else if (cue.delivery === 'stammer' || cue.delivery === 'tremble') {
-        utter.pitch = 0.76;
-        utter.rate = 0.72;
-        utter.volume = cue.delivery === 'tremble' ? 0.68 : 0.82;
-      } else {
-        utter.pitch = 0.74;
-        utter.rate = 0.9;
-        utter.volume = 0.85;
-      }
-
-      synth.speak(utter);
-    } catch {
-      // Ignore speech synthesis errors
+      callbacks?.onStarted?.(cue.id, cue.durationSec);
+      globalThis.setTimeout(() => {
+        if (nonce === this.activeCueNonce) callbacks?.onEnded?.(cue.id);
+      }, Math.round(cue.durationSec * 1000));
     }
   }
 }

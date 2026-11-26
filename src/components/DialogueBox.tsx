@@ -27,8 +27,13 @@ export function DialogueBox({ cue, cutsceneLocked, onSkipCutscene }: DialogueBox
     let timerId: number | null = null;
     let cancelled = false;
 
-    const baseStepMs =
+    const fallbackStepMs =
       cue.delivery === 'stammer' ? 52 : cue.delivery === 'tremble' ? 66 : cue.delivery === 'booming' ? 28 : 34;
+
+    const targetRevealMs = cue.audioDurationSec
+      ? Math.max(400, cue.audioDurationSec * 1000 * 0.82)
+      : cue.text.length * fallbackStepMs;
+    const baseStepMs = Math.max(18, Math.min(95, targetRevealMs / Math.max(1, cue.text.length)));
 
     const advance = () => {
       if (cancelled) return;
@@ -39,16 +44,16 @@ export function DialogueBox({ cue, cutsceneLocked, onSkipCutscene }: DialogueBox
       const ch = cue.text[idx - 1];
       let delay = baseStepMs;
       if (ch === '.' && (cue.delivery === 'stammer' || cue.delivery === 'tremble')) {
-        delay = 145;
+        delay = Math.max(baseStepMs, 110);
       } else if (ch === '-' && cue.delivery === 'stammer') {
-        delay = 180;
+        delay = Math.max(baseStepMs, 130);
       } else if (ch === ',' || ch === '—') {
-        delay = 120;
+        delay = Math.max(baseStepMs, 95);
       }
       timerId = window.setTimeout(advance, delay);
     };
 
-    timerId = window.setTimeout(advance, 40);
+    timerId = window.setTimeout(advance, 16);
 
     return () => {
       cancelled = true;

@@ -28,6 +28,7 @@ export interface DialogueCue {
   text: string;
   delivery: DialogueDelivery;
   durationSec: number;
+  audioDurationSec?: number;
   isBanter?: boolean;
   sfxHook?: CutsceneSfxHook;
 }
@@ -103,7 +104,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Warrior',
     text: 'I... I c-can do this...',
     delivery: 'stammer',
-    durationSec: 3.5,
+    durationSec: 3.6,
   },
   {
     id: 'intro_resolve',
@@ -111,7 +112,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Warrior',
     text: 'Only one left... and I can finally break free from this reality. I will end him.',
     delivery: 'normal',
-    durationSec: 4.9,
+    durationSec: 5.2,
   },
   {
     id: 'dragon_pity',
@@ -119,7 +120,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Armored Wyvern',
     text: 'How pathetic... I pity you. All this... for what?',
     delivery: 'booming',
-    durationSec: 3.8,
+    durationSec: 4.2,
     sfxHook: 'dragon_laugh',
   },
   {
@@ -128,7 +129,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Armored Wyvern',
     text: 'Die!',
     delivery: 'booming',
-    durationSec: 1.05,
+    durationSec: 1.1,
   },
   {
     id: 'warrior_recover',
@@ -136,7 +137,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Warrior',
     text: 'Do you think I give up that easily?',
     delivery: 'normal',
-    durationSec: 2.55,
+    durationSec: 2.8,
     sfxHook: 'warrior_chuckle',
   },
   {
@@ -145,7 +146,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Warrior',
     text: 'I... won...',
     delivery: 'tremble',
-    durationSec: 2.1,
+    durationSec: 2.3,
   },
   {
     id: 'defeat_mockery',
@@ -153,7 +154,7 @@ export const CORE_CUTSCENE_VOICE_CUES: DialogueCue[] = [
     speakerName: 'Armored Wyvern',
     text: 'How utterly pathetic.',
     delivery: 'booming',
-    durationSec: 2.4,
+    durationSec: 2.6,
   },
 ];
 
@@ -210,7 +211,6 @@ export class BanterDirector {
       (b) => b.trigger === trigger && !this.usedIds.has(b.id) && b.id !== this.lastLineId,
     );
     if (candidates.length === 0) {
-      // Reset context usage if all lines in this category were cycled
       DRAGON_BANTER_POOL.filter((b) => b.trigger === trigger).forEach((b) =>
         this.usedIds.delete(b.id),
       );
@@ -234,7 +234,7 @@ export class BanterDirector {
       speakerName: 'Armored Wyvern',
       text: pick.text,
       delivery: 'booming',
-      durationSec: 3.1,
+      durationSec: 3.4,
       isBanter: true,
     };
   }
@@ -242,7 +242,11 @@ export class BanterDirector {
 
 export interface CutsceneAnimationHooks {
   onPhaseChange?: (phase: CutscenePhase, flags: CutsceneFlags) => void;
+  /** Called at the exact instant voice audio begins (or fallback triggers) so text & audio start in lockstep. */
   onDialogueChange?: (cue: DialogueCue | null) => void;
+  /** Requests voice preparation & playback; director holds step transition until onStarted + onEnded complete. */
+  onVoiceRequest?: (cue: DialogueCue) => void;
+  onVoiceStop?: () => void;
   onSfxTrigger?: (hook: CutsceneSfxHook) => void;
   onAmbushStrike?: () => void;
   onDragonDecapitate?: () => void;
@@ -254,12 +258,20 @@ export interface CutsceneAnimationHooks {
 export class CutsceneDirector {
   private phase: CutscenePhase = 'IDLE';
   private phaseTime = 0;
+  private stepTime = 0;
   private stepIndex = 0;
   private flags: CutsceneFlags;
   private hooks: CutsceneAnimationHooks;
   private banter = new BanterDirector();
+
+  private pendingCue: DialogueCue | null = null;
   private activeDialogue: DialogueCue | null = null;
   private dialogueTimer = 0;
+  private awaitingAudioStart = false;
+  private awaitingAudioTimer = 0;
+  private activeAudioPlaying = false;
+  private audioMaxGuardTimer = 0;
+  private postAudioPauseTimer = 0;
   private walkScrapeAccum = 0;
 
   constructor(hooks: CutsceneAnimationHooks = {}) {
@@ -302,13 +314,63 @@ export class CutsceneDirector {
     return this.getFlags();
   }
 
+  /** Called by CutsceneVoiceController the instant audio starts playing (with exact decoded duration if available). */
+  public notifyVoiceStarted(cueId: string, audioDurationSec?: number): void {
+    const target =
+      this.pendingCue?.id === cueId
+        ? this.pendingCue
+        : this.activeDialogue?.id === cueId
+          ? this.activeDialogue
+          : null;
+    if (!target) return;
+
+    this.pendingCue = null;
+    this.awaitingAudioStart = false;
+    this.awaitingAudioTimer = 0;
+    this.activeAudioPlaying = true;
+
+    const finalDuration =
+      audioDurationSec && audioDurationSec > 0.2
+        ? Math.max(target.durationSec, audioDurationSec + 0.35)
+        : target.durationSec;
+
+    const syncedCue: DialogueCue = {
+      ...target,
+      durationSec: finalDuration,
+      audioDurationSec: audioDurationSec && audioDurationSec > 0.2 ? audioDurationSec : undefined,
+    };
+
+    this.activeDialogue = syncedCue;
+    this.dialogueTimer = finalDuration + 0.2;
+    this.audioMaxGuardTimer = Math.max(4.0, finalDuration + 2.0);
+    this.hooks.onDialogueChange?.(syncedCue);
+  }
+
+  /** Called by CutsceneVoiceController when audio playback finishes naturally. */
+  public notifyVoiceEnded(cueId: string): void {
+    if (this.pendingCue?.id === cueId) {
+      // Edge case: ended immediately before started
+      this.notifyVoiceStarted(cueId);
+    }
+    if (this.activeDialogue?.id !== cueId && !this.activeAudioPlaying) return;
+
+    this.awaitingAudioStart = false;
+    this.activeAudioPlaying = false;
+    this.audioMaxGuardTimer = 0;
+    this.postAudioPauseTimer = 0.28;
+    // Keep subtitle briefly readable after final word if timer had much more left
+    if (this.dialogueTimer > 0.65) {
+      this.dialogueTimer = 0.45;
+    }
+  }
+
   public beginBattle(forceReplayIntro = false): CutscenePhase {
     this.banter.reset();
     this.clearDialogue();
 
     if (forceReplayIntro || !this.flags.hasSeenIntroCutscene) {
       this.enterPhase('FIRST_ENTRY_WALK');
-      this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[0]);
+      this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[0]);
     } else {
       this.enterPhase('COMBAT');
       this.hooks.onCombatStart?.();
@@ -375,17 +437,43 @@ export class CutsceneDirector {
 
   public notifyCombatEvent(trigger: BanterTrigger, canSpeak: boolean): void {
     if (this.phase !== 'COMBAT') return;
-    if (this.activeDialogue) return;
+    if (this.activeDialogue || this.pendingCue || this.awaitingAudioStart || this.activeAudioPlaying) {
+      return;
+    }
     const cue = this.banter.tryTrigger(trigger, canSpeak);
     if (cue) {
-      this.emitDialogue(cue);
+      this.requestDialogue(cue);
     }
   }
 
   public update(dt: number, canBanterSpeak: boolean): void {
+    if (this.awaitingAudioStart) {
+      this.awaitingAudioTimer -= dt;
+      if (this.awaitingAudioTimer <= 0 && this.pendingCue) {
+        // Failsafe if voice request never responded: show text without hanging cutscene
+        const fallbackCue = this.pendingCue;
+        this.pendingCue = null;
+        this.awaitingAudioStart = false;
+        this.activeDialogue = fallbackCue;
+        this.dialogueTimer = fallbackCue.durationSec;
+        this.hooks.onDialogueChange?.(fallbackCue);
+      }
+    }
+
+    if (this.activeAudioPlaying) {
+      this.audioMaxGuardTimer -= dt;
+      if (this.audioMaxGuardTimer <= 0) {
+        this.activeAudioPlaying = false;
+      }
+    }
+
+    if (this.postAudioPauseTimer > 0) {
+      this.postAudioPauseTimer = Math.max(0, this.postAudioPauseTimer - dt);
+    }
+
     if (this.dialogueTimer > 0) {
       this.dialogueTimer = Math.max(0, this.dialogueTimer - dt);
-      if (this.dialogueTimer === 0 && this.activeDialogue) {
+      if (this.dialogueTimer === 0 && this.activeDialogue && !this.activeAudioPlaying) {
         this.clearDialogue();
       }
     }
@@ -393,6 +481,10 @@ export class CutsceneDirector {
     if (this.phase === 'IDLE') return;
 
     this.phaseTime += dt;
+    this.stepTime += dt;
+
+    const audioBusy =
+      this.awaitingAudioStart || this.activeAudioPlaying || this.postAudioPauseTimer > 0;
 
     if (this.phase === 'FIRST_ENTRY_WALK') {
       this.walkScrapeAccum += dt;
@@ -400,38 +492,43 @@ export class CutsceneDirector {
         this.walkScrapeAccum = 0;
         this.hooks.onSfxTrigger?.('blade_scrape');
       }
-      if (this.stepIndex === 0 && this.phaseTime >= 3.6) {
-        this.stepIndex = 1;
-        this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[1]);
-      } else if (this.stepIndex === 1 && this.phaseTime >= 8.6) {
+
+      if (this.stepIndex === 0 && !audioBusy && this.stepTime >= 1.5) {
+        this.setStep(1);
+        this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[1]);
+      } else if (this.stepIndex === 1 && !audioBusy && this.stepTime >= 2.0) {
         this.enterPhase('DRAGON_AMBUSH');
         this.hooks.onSfxTrigger?.('dragon_laugh');
-        this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[2]);
+        this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[2]);
       }
       return;
     }
 
     if (this.phase === 'DRAGON_AMBUSH') {
-      if (this.stepIndex === 0 && this.phaseTime >= 3.9) {
-        this.stepIndex = 1;
+      if (this.stepIndex === 0 && !audioBusy && this.stepTime >= 1.5) {
+        this.setStep(1);
         this.hooks.onSfxTrigger?.('dragon_blink');
-        this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[3]);
-      } else if (this.stepIndex === 1 && this.phaseTime >= 4.55) {
-        this.stepIndex = 2;
+        this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[3]);
+      } else if (
+        this.stepIndex === 1 &&
+        !this.awaitingAudioStart &&
+        this.stepTime >= 0.35
+      ) {
+        this.setStep(2);
         this.hooks.onSfxTrigger?.('ambush_hit');
         this.hooks.onAmbushStrike?.();
-      } else if (this.stepIndex === 2 && this.phaseTime >= 5.55) {
+      } else if (this.stepIndex === 2 && !audioBusy && this.stepTime >= 1.05) {
         this.enterPhase('WARRIOR_RECOVER_3S');
       }
       return;
     }
 
     if (this.phase === 'WARRIOR_RECOVER_3S') {
-      if (this.stepIndex === 0 && this.phaseTime >= 0.45) {
-        this.stepIndex = 1;
+      if (this.stepIndex === 0 && this.phaseTime >= 0.55) {
+        this.setStep(1);
         this.hooks.onSfxTrigger?.('warrior_chuckle');
-        this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[4]);
-      } else if (this.phaseTime >= 3.0) {
+        this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[4]);
+      } else if (this.stepIndex === 1 && !audioBusy && this.phaseTime >= 3.0) {
         this.clearDialogue();
         this.flags = { ...this.flags, hasSeenIntroCutscene: true };
         saveCutsceneFlags(this.flags);
@@ -443,23 +540,30 @@ export class CutsceneDirector {
     }
 
     if (this.phase === 'COMBAT') {
-      const cue = this.banter.update(dt, canBanterSpeak && !this.activeDialogue);
+      const cue = this.banter.update(
+        dt,
+        canBanterSpeak &&
+          !this.activeDialogue &&
+          !this.pendingCue &&
+          !this.awaitingAudioStart &&
+          !this.activeAudioPlaying,
+      );
       if (cue) {
-        this.emitDialogue(cue);
+        this.requestDialogue(cue);
       }
       return;
     }
 
     if (this.phase === 'VICTORY_CUTSCENE') {
-      if (this.stepIndex === 0 && this.phaseTime >= 1.55) {
-        this.stepIndex = 1;
-        this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[5]);
-      } else if (this.stepIndex === 1 && this.phaseTime >= 3.75) {
-        this.stepIndex = 2;
+      if (this.stepIndex === 0 && this.stepTime >= 1.55) {
+        this.setStep(1);
+        this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[5]);
+      } else if (this.stepIndex === 1 && !audioBusy && this.stepTime >= 1.2) {
+        this.setStep(2);
         this.clearDialogue();
         this.hooks.onSfxTrigger?.('decapitate');
         this.hooks.onDragonDecapitate?.();
-      } else if (this.stepIndex === 2 && this.phaseTime >= 5.05) {
+      } else if (this.stepIndex === 2 && this.stepTime >= 1.45) {
         this.flags = { ...this.flags, hasSeenVictoryCutscene: true };
         saveCutsceneFlags(this.flags);
         this.enterPhase('IDLE');
@@ -469,14 +573,14 @@ export class CutsceneDirector {
     }
 
     if (this.phase === 'DEFEAT_CUTSCENE') {
-      if (this.stepIndex === 0 && this.phaseTime >= 1.35) {
-        this.stepIndex = 1;
+      if (this.stepIndex === 0 && this.stepTime >= 1.35) {
+        this.setStep(1);
         this.hooks.onSfxTrigger?.('dragon_devour');
         this.hooks.onDragonDevour?.();
-      } else if (this.stepIndex === 1 && this.phaseTime >= 2.75) {
-        this.stepIndex = 2;
-        this.emitDialogue(CORE_CUTSCENE_VOICE_CUES[6]);
-      } else if (this.stepIndex === 2 && this.phaseTime >= 5.25) {
+      } else if (this.stepIndex === 1 && this.stepTime >= 1.35) {
+        this.setStep(2);
+        this.requestDialogue(CORE_CUTSCENE_VOICE_CUES[6]);
+      } else if (this.stepIndex === 2 && !audioBusy && this.stepTime >= 1.2) {
         this.clearDialogue();
         this.flags = { ...this.flags, hasSeenDefeatCutscene: true };
         saveCutsceneFlags(this.flags);
@@ -489,21 +593,47 @@ export class CutsceneDirector {
   private enterPhase(next: CutscenePhase): void {
     this.phase = next;
     this.phaseTime = 0;
+    this.stepTime = 0;
     this.stepIndex = 0;
     this.walkScrapeAccum = 0;
     this.hooks.onPhaseChange?.(next, { ...this.flags });
   }
 
-  private emitDialogue(cue: DialogueCue): void {
-    this.activeDialogue = cue;
-    this.dialogueTimer = cue.durationSec;
-    this.hooks.onDialogueChange?.(cue);
+  private setStep(nextStep: number): void {
+    this.stepIndex = nextStep;
+    this.stepTime = 0;
+  }
+
+  private requestDialogue(cue: DialogueCue): void {
+    this.pendingCue = cue;
+    this.awaitingAudioStart = true;
+    this.awaitingAudioTimer = 8.0;
+    this.activeAudioPlaying = false;
+    this.postAudioPauseTimer = 0;
+
+    if (this.hooks.onVoiceRequest) {
+      this.hooks.onVoiceRequest(cue);
+    } else {
+      // If no external voice controller is attached, show subtitle immediately
+      this.notifyVoiceStarted(cue.id, cue.durationSec);
+    }
   }
 
   private clearDialogue(): void {
-    if (!this.activeDialogue) return;
-    this.activeDialogue = null;
+    const hadAny = Boolean(this.pendingCue || this.activeDialogue || this.activeAudioPlaying);
+    this.pendingCue = null;
+    this.awaitingAudioStart = false;
+    this.awaitingAudioTimer = 0;
+    this.activeAudioPlaying = false;
+    this.audioMaxGuardTimer = 0;
+    this.postAudioPauseTimer = 0;
     this.dialogueTimer = 0;
-    this.hooks.onDialogueChange?.(null);
+    if (hadAny) {
+      this.hooks.onVoiceStop?.();
+    }
+    if (this.activeDialogue) {
+      this.activeDialogue = null;
+      this.hooks.onDialogueChange?.(null);
+    }
   }
 }

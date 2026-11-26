@@ -415,6 +415,7 @@ interface EngineCallbacks {
   onBattleEnd: (summary: BattleSummary) => void;
   onDialogueChange?: (cue: DialogueCue | null) => void;
   onCutscenePhaseChange?: (phase: CutscenePhase) => void;
+  onVoiceError?: (message: string) => void;
 }
 
 export class PixelBattleEngine {
@@ -685,8 +686,23 @@ export class PixelBattleEngine {
       onPhaseChange: (phase) => {
         this.callbacks.onCutscenePhaseChange?.(phase);
       },
+      onVoiceRequest: (cue) => {
+        cutsceneVoice.speakDialogue(cue, {
+          onStarted: (cueId, durationSec) => {
+            this.cutscene.notifyVoiceStarted(cueId, durationSec);
+          },
+          onEnded: (cueId) => {
+            this.cutscene.notifyVoiceEnded(cueId);
+          },
+          onError: (msg) => {
+            this.callbacks.onVoiceError?.(msg);
+          },
+        });
+      },
+      onVoiceStop: () => {
+        cutsceneVoice.stopSpeech();
+      },
       onDialogueChange: (cue) => {
-        cutsceneVoice.speakDialogue(cue);
         this.callbacks.onDialogueChange?.(cue);
       },
       onSfxTrigger: (hook) => {

@@ -353,6 +353,7 @@ export default function App() {
   const [isSubmittingMatch, setIsSubmittingMatch] = useState(false);
 
   const [dialogueCue, setDialogueCue] = useState<DialogueCue | null>(null);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
 
   const [hud, setHud] = useState<HudSnapshot>({
     warriorHp: BATTLE_CONFIG.warriorBaseHp,
@@ -573,6 +574,9 @@ export default function App() {
       },
       onDialogueChange: (cue) => {
         setDialogueCue(cue);
+      },
+      onVoiceError: (msg) => {
+        setVoiceNotice(msg);
       },
     });
     engineRef.current = engine;
@@ -1146,6 +1150,22 @@ export default function App() {
                 cutsceneLocked={hud.cutsceneActive}
                 onSkipCutscene={() => engineRef.current?.skipCutscene()}
               />
+            )}
+
+            {voiceNotice && gameState === 'PLAYING' && (
+              <div
+                dir="ltr"
+                className="absolute top-3 left-1/2 -translate-x-1/2 z-30 max-w-md w-[90%] bg-[#26121b]/95 border border-rose-400/70 px-3 py-1.5 text-[11px] font-mono-num text-rose-100 flex items-center justify-between gap-2 pixel-frame"
+              >
+                <span className="truncate">{voiceNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setVoiceNotice(null)}
+                  className="text-amber-300 hover:text-white font-bold shrink-0 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
             )}
 
             {/* ACTIVE GAMEPLAY HUD */}
