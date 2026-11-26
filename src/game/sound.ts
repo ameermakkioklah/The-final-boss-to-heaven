@@ -9,18 +9,22 @@ class RealisticBattleAudioEngine {
   private ensureContext(): AudioContext | null {
     if (this.muted) return null;
     if (typeof window === 'undefined') return null;
-    if (!this.ctx) {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtx) {
-        this.ctx = new AudioCtx();
+    try {
+      if (!this.ctx) {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          this.ctx = new AudioCtx();
+        }
       }
+      if (this.ctx && this.ctx.state === 'suspended') {
+        void this.ctx.resume().catch(() => {});
+      }
+      return this.ctx;
+    } catch {
+      return null;
     }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      void this.ctx.resume();
-    }
-    return this.ctx;
   }
 
   private getNoiseBuffer(ctx: AudioContext): AudioBuffer {
@@ -1541,4 +1545,18 @@ class RealisticBattleAudioEngine {
   }
 }
 
-export const sound = new RealisticBattleAudioEngine();
+const rawSound = new RealisticBattleAudioEngine();
+
+export const sound: RealisticBattleAudioEngine = new Proxy(rawSound, {
+  get(target, prop, receiver) {
+    const val = Reflect.get(target, prop, receiver);
+    if (typeof val !== 'function') return val;
+    return (...args: unknown[]) => {
+      try {
+        return (val as (...a: unknown[]) => unknown).apply(target, args);
+      } catch {
+        return undefined;
+      }
+    };
+  },
+});

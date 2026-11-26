@@ -6,9 +6,12 @@ import {
 } from './cutscene';
 import { sound } from './sound';
 import {
+  drawDragonArticulated,
+  type DragonPoseKind,
+} from './dragonAnimator';
+import {
   getGameSprites,
   type GameSprites,
-  type SpriteSheet,
   type WeaponSpriteSet,
 } from './sprites';
 import {
@@ -76,33 +79,33 @@ interface WeaponSpec {
 
 const WEAPON_SPECS: Record<WeaponType, WeaponSpec> = {
   broadsword: {
-    reach: 22,
-    height: 20,
-    offsetY: 4,
+    reach: 16,
+    height: 15,
+    offsetY: 6,
     baseDmg: [20, 22, 28],
     critMult: 1.5,
     durations: [0.14, 0.14, 0.19],
     cooldowns: [0.16, 0.16, 0.25],
     knockback: 9,
     smearColor: '#66f2ff',
-    arcSpan: 10,
+    arcSpan: 9,
   },
   daggers: {
-    reach: 15,
-    height: 17,
-    offsetY: 6,
+    reach: 11,
+    height: 13,
+    offsetY: 7,
     baseDmg: [14, 16, 22],
     critMult: 1.85,
     durations: [0.095, 0.095, 0.13],
     cooldowns: [0.11, 0.11, 0.18],
     knockback: 5,
     smearColor: '#34d399',
-    arcSpan: 8,
+    arcSpan: 7,
   },
   spear: {
-    reach: 28,
-    height: 12,
-    offsetY: 9,
+    reach: 21,
+    height: 9,
+    offsetY: 10,
     baseDmg: [19, 21, 27],
     critMult: 1.65,
     durations: [0.15, 0.15, 0.2],
@@ -113,40 +116,40 @@ const WEAPON_SPECS: Record<WeaponType, WeaponSpec> = {
     isThrust: true,
   },
   axe: {
-    reach: 21,
-    height: 22,
-    offsetY: 3,
+    reach: 16,
+    height: 16,
+    offsetY: 6,
     baseDmg: [25, 28, 36],
     critMult: 1.5,
     durations: [0.18, 0.18, 0.23],
     cooldowns: [0.22, 0.22, 0.32],
     knockback: 15,
     smearColor: '#f57e25',
-    arcSpan: 13,
+    arcSpan: 11,
   },
   katana: {
-    reach: 24,
-    height: 18,
-    offsetY: 5,
+    reach: 18,
+    height: 14,
+    offsetY: 7,
     baseDmg: [18, 21, 27],
     critMult: 1.7,
     durations: [0.12, 0.12, 0.17],
     cooldowns: [0.14, 0.14, 0.21],
     knockback: 8,
     smearColor: '#a78bfa',
-    arcSpan: 12,
+    arcSpan: 10,
   },
   mace: {
-    reach: 20,
-    height: 22,
-    offsetY: 3,
+    reach: 15,
+    height: 16,
+    offsetY: 6,
     baseDmg: [24, 27, 34],
     critMult: 1.55,
     durations: [0.19, 0.19, 0.25],
     cooldowns: [0.23, 0.23, 0.33],
     knockback: 16,
     smearColor: '#ffd147',
-    arcSpan: 12,
+    arcSpan: 10,
   },
 };
 
@@ -415,7 +418,6 @@ interface EngineCallbacks {
   onBattleEnd: (summary: BattleSummary) => void;
   onDialogueChange?: (cue: DialogueCue | null) => void;
   onCutscenePhaseChange?: (phase: CutscenePhase) => void;
-  onVoiceError?: (message: string) => void;
 }
 
 export class PixelBattleEngine {
@@ -442,6 +444,7 @@ export class PixelBattleEngine {
   private cutsceneDevoured = false;
 
   private rafId: number | null = null;
+  private loopActive = false;
   private lastTime = 0;
   private accumulator = 0;
   private elapsed = 0;
@@ -694,9 +697,6 @@ export class PixelBattleEngine {
           onEnded: (cueId) => {
             this.cutscene.notifyVoiceEnded(cueId);
           },
-          onError: (msg) => {
-            this.callbacks.onVoiceError?.(msg);
-          },
         });
       },
       onVoiceStop: () => {
@@ -857,7 +857,12 @@ export class PixelBattleEngine {
   }
 
   private applyColorGradingLut(ctx: CanvasRenderingContext2D, lut: Uint8Array): void {
-    const imgData = ctx.getImageData(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    let imgData: ImageData;
+    try {
+      imgData = ctx.getImageData(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
+    } catch {
+      return;
+    }
     const d = imgData.data;
     const len = d.length;
 
@@ -930,7 +935,11 @@ export class PixelBattleEngine {
         12;
     }
 
-    ctx.putImageData(imgData, 0, 0);
+    try {
+      ctx.putImageData(imgData, 0, 0);
+    } catch {
+      // Ignore transient canvas write error
+    }
   }
 
   private initCloak(): void {
@@ -941,26 +950,39 @@ export class PixelBattleEngine {
   }
 
   public start(): void {
-    if (this.rafId !== null) return;
+    if (this.loopActive) return;
+    this.loopActive = true;
     this.lastTime = performance.now();
     const tick = (now: number) => {
-      const rawDt = (now - this.lastTime) / 1000;
-      this.lastTime = now;
-      const clampedDt = Math.min(Math.max(rawDt, 0), 0.05);
-      this.accumulator += clampedDt;
+      if (!this.loopActive) return;
+      try {
+        const rawDt = (now - this.lastTime) / 1000;
+        this.lastTime = now;
+        const clampedDt = Number.isFinite(rawDt) ? Math.min(Math.max(rawDt, 0), 0.05) : 0;
+        this.accumulator = Math.min(this.accumulator + clampedDt, FIXED_DT * 4);
 
-      while (this.accumulator >= FIXED_DT) {
-        this.stepFixed(FIXED_DT);
-        this.accumulator -= FIXED_DT;
+        let subSteps = 0;
+        while (this.accumulator >= FIXED_DT && subSteps < 4) {
+          this.stepFixed(FIXED_DT);
+          this.accumulator -= FIXED_DT;
+          subSteps++;
+        }
+
+        this.render();
+      } catch (err) {
+        // Recover cleanly from any transient frame exception without permanently freezing rAF
+        console.error('Frame error recovered:', err);
+      } finally {
+        if (this.loopActive) {
+          this.rafId = requestAnimationFrame(tick);
+        }
       }
-
-      this.render();
-      this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
   }
 
   public stop(): void {
+    this.loopActive = false;
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -1010,6 +1032,19 @@ export class PixelBattleEngine {
       this.wAwakeningTimer > 0 ||
       this.lastDanceTimer > 0 ||
       this.cutscene.isCutsceneLocked()
+    );
+  }
+
+  private isBattleTimerPaused(): boolean {
+    return (
+      this.battleEnded ||
+      this.cutscene.isCutsceneLocked() ||
+      this.wAwakeningTimer > 0 ||
+      this.lastDanceTimer > 0 ||
+      this.dAiState === 'death_fakeout' ||
+      this.dAiState === 'transforming' ||
+      this.dAiState === 'dragon_react' ||
+      this.dAiState === 'last_dance_charge'
     );
   }
 
@@ -1303,18 +1338,31 @@ export class PixelBattleEngine {
       lastDanceBannerActive: this.lastDanceTimer > 0 && this.lastDanceTimer <= 1.85,
       lastDanceMode: this.lastDanceMode,
       cutsceneActive: this.cutscene.isCutsceneLocked(),
+      battleTimeMs: Math.max(0, Math.round(this.battleElapsed * 1000)),
+      battleTimerPaused: this.isBattleTimerPaused(),
       lastEvent: this.lastEvent,
     });
   }
 
-  // Tight Dragon CORE hurtbox (excludes massive wing membranes and empty tail gaps)
+  // Tight Dragon CORE hurtbox strictly matching solid chest/torso & neck base (no under-belly air or wing/tail padding)
   private getDragonCoreHurtbox(): Box {
-    const coreX = this.dFacing === -1 ? this.dX + 10 : this.dX + (WYVERN_W - 40);
+    const coreX = this.dFacing === -1 ? this.dX + 14 : this.dX + (WYVERN_W - 36);
     return {
       x: coreX,
-      y: this.dY + 12,
-      w: 30,
-      h: 32,
+      y: this.dY + 15,
+      w: 22,
+      h: 20,
+    };
+  }
+
+  // Dragon body-rush attack hitbox used during swoops, dashes, and lunges against the warrior
+  private getDragonBodyAttackHitbox(): Box {
+    const atkX = this.dFacing === -1 ? this.dX + 10 : this.dX + (WYVERN_W - 38);
+    return {
+      x: atkX,
+      y: this.dY + 13,
+      w: 28,
+      h: 25,
     };
   }
 
@@ -1351,7 +1399,7 @@ export class PixelBattleEngine {
   // Strict close-range melee hitbox aligned strictly with the visual blade/smear
   private getWeaponBladeHitbox(): Box {
     const spec = WEAPON_SPECS[this.wWeapon];
-    const extraReach = this.wComboStep === 3 ? 3 : 0;
+    const extraReach = this.wComboStep === 3 ? 2 : 0;
     const w = spec.reach + extraReach;
     const x = this.wFacing === 1 ? this.wX + 18 : this.wX + 14 - w;
     return {
@@ -1373,8 +1421,26 @@ export class PixelBattleEngine {
     return null;
   }
 
+  private sanitizeSimulationState(): void {
+    if (!Number.isFinite(this.wX)) this.wX = 180;
+    if (!Number.isFinite(this.wY)) this.wY = getBaseFloorYAt(196) - WARRIOR_FEET_OFFSET;
+    if (!Number.isFinite(this.wVx)) this.wVx = 0;
+    if (!Number.isFinite(this.wVy)) this.wVy = 0;
+    if (!Number.isFinite(this.dX)) this.dX = 460;
+    if (!Number.isFinite(this.dY)) this.dY = 172;
+    if (!Number.isFinite(this.dVx)) this.dVx = 0;
+    if (!Number.isFinite(this.dVy)) this.dVy = 0;
+    if (!Number.isFinite(this.camX)) this.camX = 110;
+    if (!Number.isFinite(this.camY)) this.camY = 58;
+    if (!Number.isFinite(this.severedHeadX)) this.severedHeadX = this.dX;
+    if (!Number.isFinite(this.severedHeadY)) this.severedHeadY = this.dY;
+    if (!Number.isFinite(this.severedHeadVx)) this.severedHeadVx = 0;
+    if (!Number.isFinite(this.severedHeadVy)) this.severedHeadVy = 0;
+  }
+
   private stepFixed(dt: number): void {
     if (this.paused) return;
+    this.sanitizeSimulationState();
     this.elapsed += dt;
 
     for (const m of this.forestMotes) {
@@ -1413,7 +1479,7 @@ export class PixelBattleEngine {
       if (this.wHp <= 0) {
         this.wDeathTimer += dt;
         if (this.wDeathTimer > 0.18 && this.wDeathTimer < 0.95 && Math.random() < 0.45) {
-          this.particles.push({
+          this.pushParticle({
             x: this.wX + 16 + (Math.random() - 0.5) * 10,
             y: this.wY + 12 + (Math.random() - 0.5) * 8,
             vx: (Math.random() - 0.5) * 12,
@@ -1459,7 +1525,9 @@ export class PixelBattleEngine {
       return;
     }
 
-    this.battleElapsed += dt;
+    if (!this.isBattleTimerPaused()) {
+      this.battleElapsed += dt;
+    }
 
     const canBanterSpeak =
       this.wAwakeningTimer <= 0 &&
@@ -1946,7 +2014,7 @@ export class PixelBattleEngine {
 
     if (this.activeSkillDrop) {
       if (Math.random() < 0.32) {
-        this.particles.push({
+        this.pushParticle({
           x: this.activeSkillDrop.x + (Math.random() - 0.5) * 16,
           y: this.activeSkillDrop.y - 10 - Math.random() * 16,
           vx: (Math.random() - 0.5) * 12,
@@ -2101,10 +2169,11 @@ export class PixelBattleEngine {
       });
       this.spawnInfernalBurst(wCenter, this.wY + 12, 18);
       if (
+        this.dAiState !== 'defeated' &&
         this.dAiState !== 'blink_fade' &&
         this.dAiState !== 'death_fakeout' &&
         this.dAiState !== 'transforming' &&
-        Math.hypot(core.x - wCenter, core.y - (this.wY + 12)) <= 76
+        Math.hypot(core.x - wCenter, core.y - (this.wY + 12)) <= 62
       ) {
         this.applyDamageToDragon(32, true, this.wFacing, core.x, core.y);
       }
@@ -2148,10 +2217,11 @@ export class PixelBattleEngine {
           bolt.x = liveCore.x + (Math.random() - 0.5) * 18;
           this.spawnCrystalBurst(bolt.x, liveCore.y, 12);
           if (
+            this.dAiState !== 'defeated' &&
             this.dAiState !== 'blink_fade' &&
             this.dAiState !== 'death_fakeout' &&
             this.dAiState !== 'transforming' &&
-            Math.abs(bolt.x - (coreBox.x + coreBox.w / 2)) <= 38
+            Math.abs(bolt.x - (coreBox.x + coreBox.w / 2)) <= 28
           ) {
             this.applyDamageToDragon(24, true, this.wFacing, bolt.x, liveCore.y);
           }
@@ -2175,11 +2245,12 @@ export class PixelBattleEngine {
       }
       if (
         !sw.hitDone &&
+        this.dAiState !== 'defeated' &&
         this.dAiState !== 'blink_fade' &&
         this.dAiState !== 'death_fakeout' &&
         this.dAiState !== 'transforming'
       ) {
-        const waveBox: Box = { x: sw.x - 6, y: sw.y - 11, w: 12, h: 22 };
+        const waveBox: Box = { x: sw.x - 5, y: sw.y - 8, w: 10, h: 16 };
         const contact = this.boxesOverlap(waveBox, coreBox);
         if (contact) {
           sw.hitDone = true;
@@ -2214,7 +2285,7 @@ export class PixelBattleEngine {
         : Math.random() < 0.65
           ? '#C99A6B'
           : '#683282';
-      this.particles.push({
+      this.pushParticle({
         x: wingBackX,
         y: wingY,
         vx: (Math.random() - 0.5) * 16 - this.dVx * 0.12,
@@ -2540,7 +2611,13 @@ export class PixelBattleEngine {
         const wBox: Box = { x: this.wX + 4, y: this.wY + 2, w: 24, h: 24 };
         const coreBox = this.getDragonCoreHurtbox();
         const hit = this.boxesOverlap(wBox, coreBox);
-        if (hit && this.dAiState !== 'blink_fade' && this.dAiState !== 'death_fakeout' && this.dAiState !== 'transforming') {
+        if (
+          hit &&
+          this.dAiState !== 'defeated' &&
+          this.dAiState !== 'blink_fade' &&
+          this.dAiState !== 'death_fakeout' &&
+          this.dAiState !== 'transforming'
+        ) {
           this.wRollBoltDone = true;
           sound.playThunderStrike();
           this.applyDamageToDragon(22, true, this.wFacing, hit.x, hit.y);
@@ -2665,12 +2742,13 @@ export class PixelBattleEngine {
       const prevAttackTimer = this.wAttackTimer;
       this.wAttackTimer = Math.max(0, this.wAttackTimer - dt);
       const inHitWindow =
-        this.wAttackTimer <= this.wAttackDuration * 0.86 &&
-        this.wAttackTimer >= this.wAttackDuration * 0.24;
+        this.wAttackTimer <= this.wAttackDuration * 0.78 &&
+        this.wAttackTimer >= this.wAttackDuration * 0.28;
 
       if (
         !this.wAttackHitDone &&
         inHitWindow &&
+        this.dAiState !== 'defeated' &&
         this.dAiState !== 'blink_fade' &&
         this.dAiState !== 'death_fakeout' &&
         this.dAiState !== 'transforming' &&
@@ -2717,12 +2795,13 @@ export class PixelBattleEngine {
     const coreCenterX = core.x + core.w / 2;
     const coreBottomY = core.y + core.h;
     if (
+      this.dAiState !== 'defeated' &&
       this.dAiState !== 'blink_fade' &&
       this.dAiState !== 'death_fakeout' &&
       this.dAiState !== 'transforming' &&
       this.dAiState !== 'dragon_react' &&
-      Math.abs(wCenter - coreCenterX) <= (isMeteor ? 54 : 34) &&
-      Math.abs(coreBottomY - surfaceY) <= (isMeteor ? 48 : 36)
+      Math.abs(wCenter - coreCenterX) <= (isMeteor ? 44 : 26) &&
+      Math.abs(coreBottomY - surfaceY) <= (isMeteor ? 40 : 28)
     ) {
       const baseSlam = isMeteor ? 55 : 32;
       this.applyDamageToDragon(
@@ -2766,6 +2845,7 @@ export class PixelBattleEngine {
   ): void {
     if (
       this.battleEnded ||
+      this.dAiState === 'defeated' ||
       this.dAiState === 'death_fakeout' ||
       this.dAiState === 'transforming' ||
       this.dAiState === 'dragon_react'
@@ -2840,13 +2920,18 @@ export class PixelBattleEngine {
 
     // True Death only after Phase 2 1500 HP is depleted!
     if (this.dPhase2Triggered && this.dHp <= 0) {
+      this.dHp = 0;
       this.dAiState = 'defeated';
       this.dVx = 0;
       this.dVy = 0;
+      this.wAttackTimer = 0;
+      this.wDiveSlamming = false;
       this.shards = [];
       this.flamePillars = [];
       this.emberOrbs = [];
       this.bossWaves = [];
+      this.slashWaves = [];
+      this.lightningQueue = [];
       this.spawnInfernalBurst(core.x, core.y, 40);
 
       const startedCutscene = this.cutscene.beginEnding('warrior');
@@ -3809,7 +3894,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(false);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(32, this.dFacing, true);
         }
@@ -3907,7 +3992,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(false);
       if (!this.dDashHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dDashHitDone = true;
           this.damageWarrior(30, this.dFacing, true);
         }
@@ -4111,7 +4196,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(bossScale(38), this.dFacing, true);
         }
@@ -4206,7 +4291,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(bossScale(38), this.dFacing, true);
         }
@@ -4283,7 +4368,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(bossScale(42), this.dFacing, true);
         }
@@ -4322,7 +4407,7 @@ export class PixelBattleEngine {
       }
       if (!this.dSpiralHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSpiralHitDone = true;
           this.damageWarrior(bossScale(36), this.dFacing, true);
         }
@@ -4375,7 +4460,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dDashHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dDashHitDone = true;
           this.damageWarrior(bossScale(34), this.dFacing, true);
         }
@@ -4408,7 +4493,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(bossScale(30), this.dFacing, true);
         }
@@ -4485,7 +4570,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(bossScale(40), wCenterX >= core.x ? 1 : -1, true);
         }
@@ -4550,7 +4635,7 @@ export class PixelBattleEngine {
       }
       if (!this.dTailHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dTailHitDone = true;
           this.damageWarrior(bossScale(32), this.dFacing, true);
         }
@@ -4578,7 +4663,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dDashHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dDashHitDone = true;
           this.damageWarrior(bossScale(38), this.dFacing, true);
         }
@@ -4644,7 +4729,7 @@ export class PixelBattleEngine {
       this.emitTrailGhost(true);
       if (!this.dSwoopHitDone) {
         const wBox: Box = { x: this.wX + 8, y: this.wY + 4, w: 16, h: 20 };
-        if (this.boxesOverlap(wBox, this.getDragonCoreHurtbox())) {
+        if (this.boxesOverlap(wBox, this.getDragonBodyAttackHitbox())) {
           this.dSwoopHitDone = true;
           this.damageWarrior(bossScale(30), this.dFacing, true);
         }
@@ -4999,6 +5084,10 @@ export class PixelBattleEngine {
 
     for (let i = this.shards.length - 1; i >= 0; i--) {
       const sh = this.shards[i];
+      if (!Number.isFinite(sh.x) || !Number.isFinite(sh.y) || !Number.isFinite(sh.vx) || !Number.isFinite(sh.vy)) {
+        this.shards.splice(i, 1);
+        continue;
+      }
       sh.life -= dt;
       if (sh.homing && !sh.reflected) {
         const tx = this.wX + 16;
@@ -5006,9 +5095,8 @@ export class PixelBattleEngine {
         const speed = Math.hypot(sh.vx, sh.vy) || 195;
         const curAng = Math.atan2(sh.vy, sh.vx);
         const wantAng = Math.atan2(ty - sh.y, tx - sh.x);
-        let diff = wantAng - curAng;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
+        const twoPi = Math.PI * 2;
+        const diff = (((wantAng - curAng + Math.PI) % twoPi) + twoPi) % twoPi - Math.PI;
         const maxTurn = 2.6 * dt;
         const nextAng = curAng + Math.max(-maxTurn, Math.min(maxTurn, diff));
         sh.vx = Math.cos(nextAng) * speed;
@@ -5018,7 +5106,7 @@ export class PixelBattleEngine {
       sh.y += sh.vy * dt;
 
       if (Math.random() < 0.65) {
-        this.particles.push({
+        this.pushParticle({
           x: sh.x,
           y: sh.y + (Math.random() * 4 - 2),
           vx: -sh.vx * 0.14,
@@ -5131,16 +5219,19 @@ export class PixelBattleEngine {
       if (this.splats[i].life <= 0) this.splats.splice(i, 1);
     }
 
+    if (this.ghosts.length > 24) this.ghosts.splice(0, this.ghosts.length - 24);
     for (let i = this.ghosts.length - 1; i >= 0; i--) {
       this.ghosts[i].life -= dt;
       if (this.ghosts[i].life <= 0) this.ghosts.splice(i, 1);
     }
 
+    if (this.wyvernTrails.length > 16) this.wyvernTrails.splice(0, this.wyvernTrails.length - 16);
     for (let i = this.wyvernTrails.length - 1; i >= 0; i--) {
       this.wyvernTrails[i].life -= dt;
       if (this.wyvernTrails[i].life <= 0) this.wyvernTrails.splice(i, 1);
     }
 
+    if (this.shockwaves.length > 24) this.shockwaves.splice(0, this.shockwaves.length - 24);
     for (let i = this.shockwaves.length - 1; i >= 0; i--) {
       const sw = this.shockwaves[i];
       sw.life -= dt;
@@ -5148,10 +5239,11 @@ export class PixelBattleEngine {
         this.shockwaves.splice(i, 1);
         continue;
       }
-      const p = 1 - sw.life / sw.maxLife;
+      const p = 1 - sw.life / (sw.maxLife || 0.001);
       sw.radius = 6 + (sw.maxRadius - 6) * p;
     }
 
+    if (this.floatingTexts.length > 24) this.floatingTexts.splice(0, this.floatingTexts.length - 24);
     for (let i = this.floatingTexts.length - 1; i >= 0; i--) {
       const ft = this.floatingTexts[i];
       ft.life -= dt;
@@ -5246,7 +5338,7 @@ export class PixelBattleEngine {
   private spawnHealParticles(x: number, y: number): void {
     const colors = ['#3ee09e', '#b3f7d8', '#fff5d6', '#72edb9'];
     for (let i = 0; i < 18; i++) {
-      this.particles.push({
+      this.pushParticle({
         x: x + (Math.random() * 20 - 10),
         y: y + (Math.random() * 12 - 4),
         vx: (Math.random() - 0.5) * 14,
@@ -5262,7 +5354,7 @@ export class PixelBattleEngine {
 
   private spawnDustBurst(x: number, y: number, tint: string): void {
     for (let i = 0; i < 10; i++) {
-      this.particles.push({
+      this.pushParticle({
         x: x + (Math.random() * 16 - 8),
         y: y - Math.random() * 3,
         vx: (Math.random() - 0.5) * 42,
@@ -5303,14 +5395,22 @@ export class PixelBattleEngine {
     thickness: number,
     color: string
   ): void {
+    if (
+      !Number.isFinite(x1) ||
+      !Number.isFinite(y1) ||
+      !Number.isFinite(x2) ||
+      !Number.isFinite(y2)
+    ) {
+      return;
+    }
     const ix1 = Math.round(x1);
     const iy1 = Math.round(y1);
     const ix2 = Math.round(x2);
     const iy2 = Math.round(y2);
     const dx = ix2 - ix1;
     const dy = iy2 - iy1;
-    const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
-    const t = Math.max(1, Math.round(thickness));
+    const steps = Math.min(600, Math.max(Math.abs(dx), Math.abs(dy), 1));
+    const t = Math.max(1, Math.min(32, Math.round(thickness)));
     const half = Math.floor(t / 2);
     ctx.fillStyle = color;
 
@@ -5329,16 +5429,21 @@ export class PixelBattleEngine {
     thickness: number,
     color: string
   ): void {
+    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(radius)) {
+      return;
+    }
     const icx = Math.round(cx);
     const icy = Math.round(cy);
-    const r = Math.max(2, Math.round(radius));
-    const t = Math.max(1, Math.round(thickness));
+    const r = Math.max(2, Math.min(260, Math.round(radius)));
+    const t = Math.max(1, Math.min(8, Math.round(thickness)));
     ctx.fillStyle = color;
 
     let x = r;
     let y = 0;
     let err = 1 - x;
-    while (x >= y) {
+    let guard = 0;
+    while (x >= y && guard < 512) {
+      guard++;
       ctx.fillRect(icx + x, icy + y, t, t);
       ctx.fillRect(icx + y, icy + x, t, t);
       ctx.fillRect(icx - y, icy + x, t, t);
@@ -6163,95 +6268,98 @@ export class PixelBattleEngine {
       }
     }
 
-    // Draw Heavy Armored Dragon (Phase 1 Crystal / Phase 2 Fiery Infernal / Furious Power-Up)
+    // Draw Articulated 60 FPS Multi-Part Dragon (Phase 1 Crystal / Phase 2 Fiery Infernal / Furious Power-Up)
     if (this.dAiState !== 'blink_fade') {
-      const spriteSet = this.dPhase2Triggered ? this.sprites.infernalDragon : this.sprites.dragon;
       const beatSpeed = this.lastDanceMode ? 17 : this.dFurious ? 14.5 : this.dPhase2Triggered ? 11.5 : 7.5;
-      const wingCycle = Math.floor(this.elapsed * beatSpeed) % 4;
-      let dSheet: SpriteSheet =
-        wingCycle === 0
-          ? spriteSet.wingUp
-          : wingCycle === 2
-            ? spriteSet.wingDown
-            : spriteSet.wingMid;
+      const cPhase = this.cutscene.getPhase();
+      let pose: DragonPoseKind = 'hover';
 
       if (this.dAiState === 'defeated' || this.dAiState === 'death_fakeout') {
-        dSheet = spriteSet.defeated;
+        pose = 'defeated';
+      } else if (
+        this.dAiState === 'p1_beam_sweep' ||
+        this.dAiState === 'p2_beam_sweep' ||
+        this.dAiState === 'ld_xbeam_sweep' ||
+        this.dAiState === 'ld_finisher_breath' ||
+        this.dAiState === 'ld_finisher_roar' ||
+        (this.dAiState === 'dragon_react' && this.dReactRoared)
+      ) {
+        pose = 'beam';
+      } else if (
+        this.dAiState === 'p1_tail_snap' ||
+        this.dAiState === 'p2_tail_double' ||
+        this.dAiState === 'ld_tailsaw_spin' ||
+        this.dAiState === 'ld_finisher_tailslam'
+      ) {
+        pose = 'tailWhip';
       } else if (
         this.dAiState === 'p1_swoop_dive' ||
-        this.dAiState === 'p1_beam_sweep' ||
-        this.dAiState === 'p1_shard_volley' ||
         this.dAiState === 'p1_gust_dash' ||
+        this.dAiState === 'p2_spiral_charge' ||
+        this.dAiState === 'ld_skyfall_crash' ||
+        this.dAiState === 'ld_triswoop_dive'
+      ) {
+        pose = 'swoop';
+      } else if (
+        this.dAiState === 'p1_shard_volley' ||
         this.dAiState === 'p2_combo_strike' ||
-        this.dAiState === 'p2_beam_sweep' ||
         this.dAiState === 'p2_blink_ambush' ||
         this.dAiState === 'p2_meteor_barrage' ||
         this.dAiState === 'p2_slam_drop' ||
         this.dAiState === 'p2_vortex_bite' ||
-        this.dAiState === 'p2_spiral_charge' ||
         this.dAiState === 'p2_roar_nova_dash' ||
         this.dAiState === 'ld_triple_blink_slash' ||
-        this.dAiState === 'ld_xbeam_sweep' ||
-        this.dAiState === 'ld_skyfall_crash' ||
-        this.dAiState === 'ld_tailsaw_spin' ||
         this.dAiState === 'ld_bait_uppercut' ||
         this.dAiState === 'ld_wingclap_slam' ||
-        this.dAiState === 'ld_triswoop_dive' ||
         this.dAiState === 'ld_phoenix_swarm' ||
-        this.dAiState === 'ld_finisher_roar' ||
-        this.dAiState === 'ld_finisher_breath' ||
-        this.dAiState === 'ld_finisher_tailslam' ||
         this.dAiState === 'last_dance_charge' ||
-        this.dAiState === 'transforming' ||
-        (this.dAiState === 'dragon_react' && this.dReactRoared)
+        this.dAiState === 'transforming'
       ) {
-        dSheet = spriteSet.attack;
+        pose = 'attack';
+      } else if (this.dAiState === 'stunned') {
+        pose = 'stunned';
       } else if (
         this.dAiState === 'p1_tail_windup' ||
         this.dAiState === 'p2_tail_windup' ||
         this.dAiState === 'ld_tailsaw_windup' ||
         this.dAiState === 'ld_fake_stagger' ||
-        this.dHurtTimer > 0 ||
-        this.dAiState === 'stunned'
+        this.dHurtTimer > 0
       ) {
-        dSheet = spriteSet.coil;
+        pose = 'coil';
       }
 
-      const dSource = this.dFlashTimer > 0 ? dSheet.flashCanvas : dSheet.canvas;
-      const dDrawX = Math.round(this.dX);
-      const dDrawY = Math.round(this.dY);
+      const coreCenter = this.getDragonCoreCenter();
+      const isMouthEmberActive =
+        this.dPhase2Triggered ||
+        this.dFurious ||
+        this.lastDanceMode ||
+        cPhase === 'DRAGON_AMBUSH' ||
+        cPhase === 'DEFEAT_CUTSCENE' ||
+        this.dAiState === 'p1_shard_volley' ||
+        this.dAiState === 'p2_roar_nova_dash' ||
+        this.dAiState === 'transforming' ||
+        this.dAiState === 'last_dance_charge';
 
-      ctx.save();
-      if (this.dFacing === 1) {
-        ctx.translate(dDrawX + WYVERN_W, dDrawY);
-        ctx.scale(-1, 1);
-        if (this.cutsceneDecapitated) {
-          // Clip off the Dragon's head section from its defeated torso
-          ctx.drawImage(dSource, 24, 0, WYVERN_W - 24, WYVERN_H, 24, 0, WYVERN_W - 24, WYVERN_H);
-        } else {
-          ctx.drawImage(dSource, 0, 0);
-        }
-      } else if (this.cutsceneDecapitated) {
-        ctx.drawImage(dSource, 24, 0, WYVERN_W - 24, WYVERN_H, dDrawX + 24, dDrawY, WYVERN_W - 24, WYVERN_H);
-      } else {
-        ctx.drawImage(dSource, dDrawX, dDrawY);
-      }
-      ctx.restore();
-
-      // Draw severed Dragon head tumbling / resting on the arena floor after Victory decapitation
-      if (this.cutsceneDecapitated) {
-        ctx.save();
-        const hx = Math.round(this.severedHeadX);
-        const hy = Math.round(this.severedHeadY);
-        if (this.dFacing === 1) {
-          ctx.translate(hx + 24, hy);
-          ctx.scale(-1, 1);
-          ctx.drawImage(dSource, 0, 4, 24, 26, 0, 0, 24, 26);
-        } else {
-          ctx.drawImage(dSource, 0, 4, 24, 26, hx, hy, 24, 26);
-        }
-        ctx.restore();
-      }
+      drawDragonArticulated(ctx, {
+        x: this.dX,
+        y: this.dY,
+        width: WYVERN_W,
+        height: WYVERN_H,
+        facing: this.dFacing,
+        elapsed: this.elapsed,
+        beatSpeed,
+        pose,
+        hurtTimer: this.dHurtTimer,
+        isFlash: this.dFlashTimer > 0,
+        isMouthEmberActive,
+        targetDeltaX: this.wX + 16 - coreCenter.x,
+        targetDeltaY: this.wY + 14 - coreCenter.y,
+        decapitated: this.cutsceneDecapitated,
+        severedHeadX: this.severedHeadX,
+        severedHeadY: this.severedHeadY,
+        severedHeadGrounded: this.severedHeadGrounded,
+        parts: this.dPhase2Triggered ? this.sprites.infernalDragonParts : this.sprites.dragonParts,
+      });
 
       if (this.dAiState === 'transforming') {
         const core = this.getDragonCoreCenter();
@@ -6601,7 +6709,7 @@ export class PixelBattleEngine {
         }
       } else {
         const arcSpan = step === 3 ? spec.arcSpan + 2 : spec.arcSpan;
-        const reachScale = Math.min(1, spec.reach / 22);
+        const reachScale = Math.min(1, spec.reach / 16);
         for (let i = -arcSpan; i <= arcSpan; i++) {
           const curve =
             Math.round((arcSpan - Math.abs(i)) * 0.68 * reachScale) * this.slashSmear.facing;

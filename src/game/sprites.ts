@@ -1012,6 +1012,163 @@ const WYVERN_DEFEATED = [
   '................................................................................',
 ];
 
+// =========================================================================
+// ARTICULATED DRAGON ANATOMICAL SUB-SPRITES (Facing LEFT, crisp 1px art)
+// =========================================================================
+
+// 24x16 Head with swept horns, bony brow ridges, slit glowing eye, upper fangs
+const WYVERN_PART_HEAD = [
+  '......................KK',
+  '.....................KHH',
+  '............KKK.....KHHh',
+  '...........KHHhK...KHHh.',
+  '.........KKHHhhK..KHhK..',
+  '...KKKKKKKHHhhK..KHhK...',
+  '.KKIIIiiiKhhK...KIIK....',
+  'KIIIIIIIIKK....KILiK....',
+  'KIIIPPECIiK...KILiiK....',
+  'KIIIIPWWCIiK.KIILiiK....',
+  'KIIIIPECiIiKKILiiiiK....',
+  '.KIIiIKKKiiKIIiiiiiK....',
+  '.KIK.I.IKKKKKKKKKKK.....',
+  '..K.....K...............',
+  '........................',
+  '........................',
+];
+
+// 16x7 Hinged Lower Jaw with lower fangs (pivot near right back x=13,y=2)
+const WYVERN_PART_JAW = [
+  '..K.K...........',
+  '.KIKIK.KKKKKK...',
+  'KIIiiKKIIiiiKK..',
+  'KiiiiiiiissiiK..',
+  '.KKKKKKsssssK...',
+  '.......KKKKK....',
+  '................',
+];
+
+// 12x10 Armored Neck Segment (chains x2 between torso shoulder & head base)
+const WYVERN_PART_NECK = [
+  '...KKKKK....',
+  '..KILiiIK...',
+  '.KIIiiiiIK..',
+  'KILiiiiiiK..',
+  'KIIiiLLiiK..',
+  '.KIIiissK...',
+  '..KIIIssK...',
+  '...KKKKK....',
+  '............',
+  '............',
+];
+
+// 26x24 Breathing Torso & Ribcage with glowing chest core & spinal plates
+const WYVERN_PART_TORSO = [
+  '........KKKKKKKK..........',
+  '......KKIIiiiiLLKK........',
+  '.....KIIiiiiiiLiiiKK......',
+  '....KIisCcCCiiiLLiiiK.....',
+  '...KIisCCWCCCiiiLiiiiK....',
+  '..KIIssCcBCcCCiiiiiiisK...',
+  '..KIissCBcBcCiiLLiiiiisK..',
+  '.KIIissCcBBcCiiiLiiiiiisK.',
+  '.KIILssKKKiiiiiiiLiiiiisK.',
+  '.KIIsssKKKiiiiiiisKiiiisK.',
+  '.KIIissKKKIIIiiiissKiiissK',
+  '..KIIssK..KKIIiiiissKiissK',
+  '..KIIissK...KIIiiiiississK',
+  '...KIIissK...KKIIiiiiiiisK',
+  '....KKIissK....KKIIiiiiisK',
+  '......KKisK......KKIIiiiK.',
+  '........KKK........KKKiiK.',
+  '......................KKK.',
+  '..........................',
+  '..........................',
+  '..........................',
+  '..........................',
+  '..........................',
+  '..........................',
+];
+
+// 12x12 Muscular Front Forearm & Talons (pivot at top-right shoulder x=9,y=2)
+const WYVERN_PART_FRONT_ARM = [
+  '......KKKK..',
+  '.....KIIssK.',
+  '....KIIissK.',
+  '...KIIIssK..',
+  '..KIIissK...',
+  '.KhhKIIK....',
+  'KhhKHHHK....',
+  'KKK.KhhhK...',
+  '....KhhhK...',
+  '...KhhhK....',
+  '...KKKK.....',
+  '............',
+];
+
+// 10x11 Back Forearm & Talons
+const WYVERN_PART_BACK_ARM = [
+  '.....KKK..',
+  '....KiisK.',
+  '...KIissK.',
+  '..KhhKisK.',
+  '.KhhKHHK..',
+  '.KK.KhhK..',
+  '...KhhK...',
+  '..KhhK....',
+  '..KKK.....',
+  '..........',
+  '..........',
+];
+
+// 12x16 Articulated Hind Leg & 3-Clawed Talon (pivot at top x=6,y=2)
+const WYVERN_PART_HIND_LEG = [
+  '....KKKK....',
+  '...KIIssK...',
+  '..KIIissK...',
+  '..KIiissK...',
+  '...KIIssK...',
+  '...KIissK...',
+  '....KIisK...',
+  '....KIisK...',
+  '...KKIisK...',
+  '..KHHKiisK..',
+  '.KHHhKHHK...',
+  '.KKK.KhhK...',
+  '....KhhK....',
+  '....KKK.....',
+  '............',
+  '............',
+];
+
+// 12x9 Segmented Armored Tail Link (chained x5)
+const WYVERN_PART_TAIL_SEG = [
+  '..KKKKKKKK..',
+  '.KIIiiiiLLK.',
+  'KIIiiiiiiisK',
+  'KIIiissssssK',
+  '.KKKiiisssK.',
+  '....KKKKKK..',
+  '............',
+  '............',
+  '............',
+];
+
+// 16x12 Jagged Crystal/Magma Tail Spear Tip
+const WYVERN_PART_TAIL_TIP = [
+  '..........KK....',
+  '.........KTtK...',
+  '........KTCCtK..',
+  '...KK..KTCCWCK..',
+  '..KIIKKTtCBcCK..',
+  '.KIIssKTTtCCcK..',
+  'KIiisssKTtTTKKK.',
+  '.KKKKKKKTtTTK...',
+  '.......TTTTK....',
+  '........KKK.....',
+  '................',
+  '................',
+];
+
 interface RimConfig {
   color: string;
   chars: Set<string>;
@@ -1135,6 +1292,19 @@ export interface DragonSprites {
   defeated: SpriteSheet;
 }
 
+export interface DragonPartSprites {
+  head: SpriteSheet;
+  jaw: SpriteSheet;
+  neck: SpriteSheet;
+  torso: SpriteSheet;
+  frontArm: SpriteSheet;
+  backArm: SpriteSheet;
+  hindLeg: SpriteSheet;
+  tailSeg: SpriteSheet;
+  tailTip: SpriteSheet;
+  palette: Record<string, string>;
+}
+
 export interface GameSprites {
   warrior: {
     idle0: SpriteSheet;
@@ -1161,6 +1331,8 @@ export interface GameSprites {
   };
   dragon: DragonSprites;
   infernalDragon: DragonSprites;
+  dragonParts: DragonPartSprites;
+  infernalDragonParts: DragonPartSprites;
 }
 
 let cachedSprites: GameSprites | null = null;
@@ -1221,6 +1393,30 @@ export function getGameSprites(): GameSprites {
       attack: buildSpriteSheet(WYVERN_ATTACK, INFERNAL_PALETTE, INFERNAL_RIM),
       coil: buildSpriteSheet(WYVERN_COIL, INFERNAL_PALETTE, INFERNAL_RIM),
       defeated: buildSpriteSheet(WYVERN_DEFEATED, INFERNAL_PALETTE, INFERNAL_RIM),
+    },
+    dragonParts: {
+      head: buildSpriteSheet(WYVERN_PART_HEAD, WYVERN_PALETTE, WYVERN_RIM),
+      jaw: buildSpriteSheet(WYVERN_PART_JAW, WYVERN_PALETTE),
+      neck: buildSpriteSheet(WYVERN_PART_NECK, WYVERN_PALETTE, WYVERN_RIM),
+      torso: buildSpriteSheet(WYVERN_PART_TORSO, WYVERN_PALETTE, WYVERN_RIM),
+      frontArm: buildSpriteSheet(WYVERN_PART_FRONT_ARM, WYVERN_PALETTE, WYVERN_RIM),
+      backArm: buildSpriteSheet(WYVERN_PART_BACK_ARM, WYVERN_PALETTE),
+      hindLeg: buildSpriteSheet(WYVERN_PART_HIND_LEG, WYVERN_PALETTE, WYVERN_RIM),
+      tailSeg: buildSpriteSheet(WYVERN_PART_TAIL_SEG, WYVERN_PALETTE, WYVERN_RIM),
+      tailTip: buildSpriteSheet(WYVERN_PART_TAIL_TIP, WYVERN_PALETTE, WYVERN_RIM),
+      palette: WYVERN_PALETTE,
+    },
+    infernalDragonParts: {
+      head: buildSpriteSheet(WYVERN_PART_HEAD, INFERNAL_PALETTE, INFERNAL_RIM),
+      jaw: buildSpriteSheet(WYVERN_PART_JAW, INFERNAL_PALETTE),
+      neck: buildSpriteSheet(WYVERN_PART_NECK, INFERNAL_PALETTE, INFERNAL_RIM),
+      torso: buildSpriteSheet(WYVERN_PART_TORSO, INFERNAL_PALETTE, INFERNAL_RIM),
+      frontArm: buildSpriteSheet(WYVERN_PART_FRONT_ARM, INFERNAL_PALETTE, INFERNAL_RIM),
+      backArm: buildSpriteSheet(WYVERN_PART_BACK_ARM, INFERNAL_PALETTE),
+      hindLeg: buildSpriteSheet(WYVERN_PART_HIND_LEG, INFERNAL_PALETTE, INFERNAL_RIM),
+      tailSeg: buildSpriteSheet(WYVERN_PART_TAIL_SEG, INFERNAL_PALETTE, INFERNAL_RIM),
+      tailTip: buildSpriteSheet(WYVERN_PART_TAIL_TIP, INFERNAL_PALETTE, INFERNAL_RIM),
+      palette: INFERNAL_PALETTE,
     },
   };
   return cachedSprites;

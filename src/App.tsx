@@ -5,6 +5,7 @@ import {
   ArrowLeftRight,
   ArrowRight,
   ArrowUp,
+  Clock,
   Code2,
   Globe,
   Maximize2,
@@ -354,7 +355,6 @@ export default function App() {
   const [isSubmittingMatch, setIsSubmittingMatch] = useState(false);
 
   const [dialogueCue, setDialogueCue] = useState<DialogueCue | null>(null);
-  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
 
   const [hud, setHud] = useState<HudSnapshot>({
     warriorHp: BATTLE_CONFIG.warriorBaseHp,
@@ -385,6 +385,8 @@ export default function App() {
     lastDanceBannerActive: false,
     lastDanceMode: false,
     cutsceneActive: false,
+    battleTimeMs: 0,
+    battleTimerPaused: false,
     lastEvent: { type: 'ready' },
   });
 
@@ -579,9 +581,6 @@ export default function App() {
       onDialogueChange: (cue) => {
         setDialogueCue(cue);
       },
-      onVoiceError: (msg) => {
-        setVoiceNotice(msg);
-      },
     });
     engineRef.current = engine;
     engine.start();
@@ -617,10 +616,12 @@ export default function App() {
 
   useEffect(() => {
     if (gameState !== 'PLAYING') return;
-    if (hud.cutsceneActive) {
-      const isEnding =
-        (hud.dragonHp <= 0 && !hud.dragonTransforming) || hud.warriorHp <= 0;
-      bossMusic.setIntensity(isEnding ? 'ending' : 'intro');
+    const isEnding =
+      (hud.dragonHp <= 0 && !hud.dragonTransforming) || hud.warriorHp <= 0;
+    if (isEnding) {
+      bossMusic.setIntensity('ending');
+    } else if (hud.cutsceneActive) {
+      bossMusic.setIntensity('intro');
     } else if (hud.lastDanceMode || hud.lastDanceCinematic) {
       bossMusic.setIntensity('last_dance');
     } else if (hud.dragonPhase2 || hud.dragonTransforming) {
@@ -1243,22 +1244,6 @@ export default function App() {
               />
             )}
 
-            {voiceNotice && gameState === 'PLAYING' && (
-              <div
-                dir="ltr"
-                className="absolute top-3 left-1/2 -translate-x-1/2 z-30 max-w-md w-[90%] bg-[#26121b]/95 border border-rose-400/70 px-3 py-1.5 text-[11px] font-mono-num text-rose-100 flex items-center justify-between gap-2 pixel-frame"
-              >
-                <span className="truncate">{voiceNotice}</span>
-                <button
-                  type="button"
-                  onClick={() => setVoiceNotice(null)}
-                  className="text-amber-300 hover:text-white font-bold shrink-0 cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
             {/* ACTIVE GAMEPLAY HUD */}
             {gameState !== 'TITLE' && (
               <div
@@ -1271,90 +1256,120 @@ export default function App() {
                   dir="ltr"
                   className="grid grid-cols-[1fr_auto_1fr] items-start gap-2 sm:gap-3 w-full"
                 >
-                  {/* Warrior HP */}
-                  <div
-                    className={`bg-[#161124]/92 border-2 px-2.5 py-1.5 pixel-frame max-w-[245px] ${
-                      hud.warriorAwakened ? 'border-amber-400' : 'border-[#473d61]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <WarriorPixelIcon />
-                        <span className="font-bold text-xs text-[#f4efe6] truncate">
-                          {activeSession?.playerName || t.warriorName}
-                        </span>
-                      </div>
-                      <span
-                        className={`text-[10px] font-mono-num whitespace-nowrap ${
-                          hud.warriorAwakened ? 'text-amber-300 font-bold' : 'text-sky-300'
-                        }`}
-                      >
-                        {hud.warriorAwakened
-                          ? `${t.awakenedTag} · ${t.tripleJumpTag}`
-                          : hud.dragonPhase2
-                            ? t.tripleJumpTag
-                            : `${t.dmgLabel}: ${BATTLE_CONFIG.warriorDmg}`}
-                      </span>
-                    </div>
-
-                    <div className="mt-1 h-3 w-full bg-[#0c0914] border border-[#3a3152] p-0.5 flex gap-0.5">
-                      <div
-                        className={`h-full transition-all duration-150 ${
-                          hud.warriorAwakened
-                            ? 'bg-gradient-to-r from-orange-500 via-amber-400 to-yellow-300'
-                            : isOverhealed
-                              ? 'bg-emerald-400'
-                              : warriorBarPct <= 30
-                                ? 'bg-rose-500'
-                                : 'bg-emerald-500'
-                        }`}
-                        style={{ width: `${warriorBarPct}%` }}
-                      />
-                    </div>
-
-                    <div className="mt-1 flex items-center justify-between text-[11px] font-mono-num gap-1.5">
-                      <span
-                        className={
-                          hud.warriorAwakened
-                            ? 'text-amber-200 font-bold'
-                            : isOverhealed
-                              ? 'text-emerald-300 font-bold'
-                              : 'text-[#e5dcf0]'
-                        }
-                      >
-                        {t.hpLabel}: {hud.warriorHp}/{hud.warriorMaxHp}
-                        {hud.warriorShield > 0 && (
-                          <span className="ml-1 text-amber-300 font-bold">
-                            +{hud.warriorShield}
+                  {/* Left Column: Warrior HP + Compact Combat Timer */}
+                  <div className="flex flex-col items-start gap-1.5 max-w-[245px] w-full">
+                    <div
+                      className={`w-full bg-[#161124]/92 border-2 px-2.5 py-1.5 pixel-frame ${
+                        hud.warriorAwakened ? 'border-amber-400' : 'border-[#473d61]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <WarriorPixelIcon />
+                          <span className="font-bold text-xs text-[#f4efe6] truncate">
+                            {activeSession?.playerName || t.warriorName}
                           </span>
-                        )}
-                      </span>
-                      <div
-                        className="flex items-center gap-0.5"
-                        aria-label={`Heal charges ${hud.healCharges} of ${hud.maxHealCharges}`}
-                      >
-                        {Array.from({ length: hud.maxHealCharges }).map((_, idx) => {
-                          const filled = idx < hud.healCharges;
-                          return (
-                            <span
-                              key={idx}
-                              className={`inline-block w-2 h-2.5 border ${
-                                filled
-                                  ? 'bg-emerald-400 border-emerald-200'
-                                  : 'bg-[#0c0914] border-[#3a3152]'
-                              }`}
-                            />
-                          );
-                        })}
+                        </div>
                         <span
-                          className={`ml-1 text-[10px] font-bold ${
-                            hud.healCharges > 0 ? 'text-emerald-300' : 'text-rose-400'
+                          className={`text-[10px] font-mono-num whitespace-nowrap ${
+                            hud.warriorAwakened ? 'text-amber-300 font-bold' : 'text-sky-300'
                           }`}
                         >
-                          {hud.healCharges}/{hud.maxHealCharges}
+                          {hud.warriorAwakened
+                            ? `${t.awakenedTag} · ${t.tripleJumpTag}`
+                            : hud.dragonPhase2
+                              ? t.tripleJumpTag
+                              : `${t.dmgLabel}: ${BATTLE_CONFIG.warriorDmg}`}
                         </span>
                       </div>
+
+                      <div className="mt-1 h-3 w-full bg-[#0c0914] border border-[#3a3152] p-0.5 flex gap-0.5">
+                        <div
+                          className={`h-full transition-all duration-150 ${
+                            hud.warriorAwakened
+                              ? 'bg-gradient-to-r from-orange-500 via-amber-400 to-yellow-300'
+                              : isOverhealed
+                                ? 'bg-emerald-400'
+                                : warriorBarPct <= 30
+                                  ? 'bg-rose-500'
+                                  : 'bg-emerald-500'
+                          }`}
+                          style={{ width: `${warriorBarPct}%` }}
+                        />
+                      </div>
+
+                      <div className="mt-1 flex items-center justify-between text-[11px] font-mono-num gap-1.5">
+                        <span
+                          className={
+                            hud.warriorAwakened
+                              ? 'text-amber-200 font-bold'
+                              : isOverhealed
+                                ? 'text-emerald-300 font-bold'
+                                : 'text-[#e5dcf0]'
+                          }
+                        >
+                          {t.hpLabel}: {hud.warriorHp}/{hud.warriorMaxHp}
+                          {hud.warriorShield > 0 && (
+                            <span className="ml-1 text-amber-300 font-bold">
+                              +{hud.warriorShield}
+                            </span>
+                          )}
+                        </span>
+                        <div
+                          className="flex items-center gap-0.5"
+                          aria-label={`Heal charges ${hud.healCharges} of ${hud.maxHealCharges}`}
+                        >
+                          {Array.from({ length: hud.maxHealCharges }).map((_, idx) => {
+                            const filled = idx < hud.healCharges;
+                            return (
+                              <span
+                                key={idx}
+                                className={`inline-block w-2 h-2.5 border ${
+                                  filled
+                                    ? 'bg-emerald-400 border-emerald-200'
+                                    : 'bg-[#0c0914] border-[#3a3152]'
+                                }`}
+                              />
+                            );
+                          })}
+                          <span
+                            className={`ml-1 text-[10px] font-bold ${
+                              hud.healCharges > 0 ? 'text-emerald-300' : 'text-rose-400'
+                            }`}
+                          >
+                            {hud.healCharges}/{hud.maxHealCharges}
+                          </span>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Compact Side Battle Timer */}
+                    {!hud.cutsceneActive && (
+                      <div
+                        className={`inline-flex items-center gap-1.5 bg-[#130f1f]/90 border px-2 py-0.5 pixel-frame text-[11px] font-mono-num tabular-nums transition-colors duration-150 ${
+                          hud.battleTimerPaused
+                            ? 'border-[#3a3152] text-[#9e92b5]'
+                            : 'border-[#473d61] text-amber-200'
+                        }`}
+                        aria-label="Combat timer"
+                      >
+                        <Clock
+                          className={`w-3 h-3 shrink-0 ${
+                            hud.battleTimerPaused ? 'text-[#7c7096]' : 'text-amber-400'
+                          }`}
+                        />
+                        <span>
+                          {(() => {
+                            const totalTenths = Math.floor(hud.battleTimeMs / 100);
+                            const tenths = totalTenths % 10;
+                            const totalSec = Math.floor(totalTenths / 10);
+                            const mins = Math.floor(totalSec / 60);
+                            const secs = totalSec % 60;
+                            return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${tenths}`;
+                          })()}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Center Pause & Compact Log */}

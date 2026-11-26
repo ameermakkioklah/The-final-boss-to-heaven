@@ -41,17 +41,21 @@ export class CutsceneVoiceController {
 
   private ensureAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
-    if (!this.audioCtx) {
-      const Ctx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctx) return null;
-      this.audioCtx = new Ctx();
+    try {
+      if (!this.audioCtx) {
+        const Ctx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctx) return null;
+        this.audioCtx = new Ctx();
+      }
+      if (this.audioCtx.state === 'suspended') {
+        void this.audioCtx.resume().catch(() => {});
+      }
+      return this.audioCtx;
+    } catch {
+      return null;
     }
-    if (this.audioCtx.state === 'suspended') {
-      void this.audioCtx.resume().catch(() => {});
-    }
-    return this.audioCtx;
   }
 
   private getCacheKey(cue: DialogueCue): string {
@@ -106,7 +110,14 @@ export class CutsceneVoiceController {
     if (cached) return cached;
 
     try {
-      const resp = await fetch(this.getStaticVoiceUrl(cue));
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? globalThis.setTimeout(() => ctrl.abort(), 1600) : null;
+      let resp: Response;
+      try {
+        resp = await fetch(this.getStaticVoiceUrl(cue), ctrl ? { signal: ctrl.signal } : undefined);
+      } finally {
+        if (timer !== null) globalThis.clearTimeout(timer);
+      }
       if (!resp.ok) return null;
       const contentType = resp.headers.get('content-type') || '';
       // Reject SPA HTML index fallback if the static .wav file does not exist
@@ -134,31 +145,35 @@ export class CutsceneVoiceController {
   }
 
   public triggerSfx(hook: CutsceneSfxHook): void {
-    switch (hook) {
-      case 'blade_scrape':
-        sound.playBladeScrape();
-        break;
-      case 'dragon_laugh':
-        sound.playDragonLaugh();
-        break;
-      case 'dragon_blink':
-        sound.playWyvernTelegraph('blink', true);
-        break;
-      case 'ambush_hit':
-        sound.playHitImpact(true);
-        break;
-      case 'warrior_chuckle':
-        sound.playWarriorChuckle();
-        break;
-      case 'warrior_stance':
-        sound.playComboSlash(1, false, 'broadsword');
-        break;
-      case 'decapitate':
-        sound.playDecapitateSlash();
-        break;
-      case 'dragon_devour':
-        sound.playDragonDevour();
-        break;
+    try {
+      switch (hook) {
+        case 'blade_scrape':
+          sound.playBladeScrape();
+          break;
+        case 'dragon_laugh':
+          sound.playDragonLaugh();
+          break;
+        case 'dragon_blink':
+          sound.playWyvernTelegraph('blink', true);
+          break;
+        case 'ambush_hit':
+          sound.playHitImpact(true);
+          break;
+        case 'warrior_chuckle':
+          sound.playWarriorChuckle();
+          break;
+        case 'warrior_stance':
+          sound.playComboSlash(1, false, 'broadsword');
+          break;
+        case 'decapitate':
+          sound.playDecapitateSlash();
+          break;
+        case 'dragon_devour':
+          sound.playDragonDevour();
+          break;
+      }
+    } catch {
+      // Non-fatal SFX guard
     }
   }
 
@@ -229,18 +244,26 @@ export class CutsceneVoiceController {
           return { buffer: null, error: this.lastVoiceError || 'Voice API unavailable on this host.' };
         }
 
-        // 2. Otherwise synthesize dynamically via /api/voice backend
-        const resp = await fetch('/api/voice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cueId: cue.id,
-            speaker: cue.speaker,
-            text: cue.text,
-            delivery: cue.delivery,
-            isBanter: Boolean(cue.isBanter),
-          }),
-        });
+        // 2. Otherwise synthesize dynamically via /api/voice backend (short timeout so cutscenes never stall)
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = ctrl ? globalThis.setTimeout(() => ctrl.abort(), 1800) : null;
+        let resp: Response;
+        try {
+          resp = await fetch('/api/voice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              cueId: cue.id,
+              speaker: cue.speaker,
+              text: cue.text,
+              delivery: cue.delivery,
+              isBanter: Boolean(cue.isBanter),
+            }),
+            signal: ctrl?.signal,
+          });
+        } finally {
+          if (timeoutId !== null) globalThis.clearTimeout(timeoutId);
+        }
         if (!resp.ok) {
           let errMsg = `Voice server returned HTTP ${resp.status}`;
           try {
@@ -250,11 +273,7 @@ export class CutsceneVoiceController {
             // Non-JSON response (e.g. static host 404 HTML page)
           }
 
-          if (resp.status === 404) {
-            this.voiceApiDisabled = true;
-            this.lastVoiceError =
-              'Live /api/voice backend is not mounted on this static host (404). Open via AI Studio preview or deploy with api/voice + GEMINI_API_KEY.';
-          } else if (resp.status === 503) {
+          if (resp.status === 404 || resp.status === 503 || resp.status >= 500) {
             this.voiceApiDisabled = true;
             this.lastVoiceError = errMsg;
           } else if (resp.status === 429) {

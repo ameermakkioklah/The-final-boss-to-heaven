@@ -176,88 +176,92 @@ class BossMusicEngine {
 
   private ensureGraph(): AudioContext | null {
     if (typeof window === 'undefined') return null;
-    if (!this.ctx) {
-      const AudioCtx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtx) return null;
-      const ctx = new AudioCtx();
-      this.ctx = ctx;
+    try {
+      if (!this.ctx) {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) return null;
+        const ctx = new AudioCtx();
+        this.ctx = ctx;
 
-      const master = ctx.createGain();
-      master.gain.value = this.muted || this.paused ? 0 : 1;
-      master.connect(ctx.destination);
-      this.masterGain = master;
+        const master = ctx.createGain();
+        master.gain.value = this.muted || this.paused ? 0 : 1;
+        master.connect(ctx.destination);
+        this.masterGain = master;
 
-      const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -16;
-      comp.knee.value = 10;
-      comp.ratio.value = 4.5;
-      comp.attack.value = 0.004;
-      comp.release.value = 0.16;
-      comp.connect(master);
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -16;
+        comp.knee.value = 10;
+        comp.ratio.value = 4.5;
+        comp.attack.value = 0.004;
+        comp.release.value = 0.16;
+        comp.connect(master);
 
-      const musicGain = ctx.createGain();
-      musicGain.gain.value = this.ducked ? 0.13 : 0.34;
-      musicGain.connect(comp);
-      this.musicGain = musicGain;
+        const musicGain = ctx.createGain();
+        musicGain.gain.value = this.ducked ? 0.13 : 0.34;
+        musicGain.connect(comp);
+        this.musicGain = musicGain;
 
-      const dry = ctx.createGain();
-      dry.gain.value = 1;
-      dry.connect(musicGain);
-      this.dryBus = dry;
+        const dry = ctx.createGain();
+        dry.gain.value = 1;
+        dry.connect(musicGain);
+        this.dryBus = dry;
 
-      // Dark fantasy hall delay / ambience bus
-      const reverbInput = ctx.createGain();
-      reverbInput.gain.value = 0.28;
-      this.reverbBus = reverbInput;
+        // Dark fantasy hall delay / ambience bus
+        const reverbInput = ctx.createGain();
+        reverbInput.gain.value = 0.28;
+        this.reverbBus = reverbInput;
 
-      const delayL = ctx.createDelay(0.5);
-      delayL.delayTime.value = 0.047;
-      const delayR = ctx.createDelay(0.5);
-      delayR.delayTime.value = 0.073;
-      const fbL = ctx.createGain();
-      fbL.gain.value = 0.34;
-      const fbR = ctx.createGain();
-      fbR.gain.value = 0.32;
-      const dampL = ctx.createBiquadFilter();
-      dampL.type = 'lowpass';
-      dampL.frequency.value = 2200;
-      const dampR = ctx.createBiquadFilter();
-      dampR.type = 'lowpass';
-      dampR.frequency.value = 1950;
+        const delayL = ctx.createDelay(0.5);
+        delayL.delayTime.value = 0.047;
+        const delayR = ctx.createDelay(0.5);
+        delayR.delayTime.value = 0.073;
+        const fbL = ctx.createGain();
+        fbL.gain.value = 0.34;
+        const fbR = ctx.createGain();
+        fbR.gain.value = 0.32;
+        const dampL = ctx.createBiquadFilter();
+        dampL.type = 'lowpass';
+        dampL.frequency.value = 2200;
+        const dampR = ctx.createBiquadFilter();
+        dampR.type = 'lowpass';
+        dampR.frequency.value = 1950;
 
-      reverbInput.connect(delayL);
-      reverbInput.connect(delayR);
-      delayL.connect(dampL);
-      delayR.connect(dampR);
-      dampL.connect(fbL);
-      dampR.connect(fbR);
-      fbL.connect(delayR);
-      fbR.connect(delayL);
-      dampL.connect(musicGain);
-      dampR.connect(musicGain);
+        reverbInput.connect(delayL);
+        reverbInput.connect(delayR);
+        delayL.connect(dampL);
+        delayR.connect(dampR);
+        dampL.connect(fbL);
+        dampR.connect(fbR);
+        fbL.connect(delayR);
+        fbR.connect(delayL);
+        dampL.connect(musicGain);
+        dampR.connect(musicGain);
 
-      // Gritty saturated bass / electric undertone bus
-      const drive = ctx.createWaveShaper();
-      drive.curve = this.makeSaturationCurve(22);
-      drive.oversample = '2x';
-      const bassFilter = ctx.createBiquadFilter();
-      bassFilter.type = 'lowpass';
-      bassFilter.frequency.value = 820;
-      bassFilter.Q.value = 1.6;
-      drive.connect(bassFilter);
-      bassFilter.connect(dry);
-      this.bassDriveBus = drive;
-      this.bassFilterBus = bassFilter;
+        // Gritty saturated bass / electric undertone bus
+        const drive = ctx.createWaveShaper();
+        drive.curve = this.makeSaturationCurve(22);
+        drive.oversample = '2x';
+        const bassFilter = ctx.createBiquadFilter();
+        bassFilter.type = 'lowpass';
+        bassFilter.frequency.value = 820;
+        bassFilter.Q.value = 1.6;
+        drive.connect(bassFilter);
+        bassFilter.connect(dry);
+        this.bassDriveBus = drive;
+        this.bassFilterBus = bassFilter;
 
-      this.initStringPad(ctx);
+        this.initStringPad(ctx);
+      }
+
+      if (this.ctx && this.ctx.state === 'suspended' && !this.muted && !this.paused) {
+        void this.ctx.resume().catch(() => {});
+      }
+      return this.ctx;
+    } catch {
+      return null;
     }
-
-    if (this.ctx && this.ctx.state === 'suspended' && !this.muted && !this.paused) {
-      void this.ctx.resume();
-    }
-    return this.ctx;
   }
 
   private initStringPad(ctx: AudioContext): void {
@@ -353,12 +357,16 @@ class BossMusicEngine {
       window.clearInterval(this.timerId);
       this.timerId = null;
     }
-    if (this.ctx && this.stringGain) {
-      const now = this.ctx.currentTime;
-      this.stringGain.gain.cancelScheduledValues(now);
-      this.stringGain.gain.setTargetAtTime(0.0001, now, 0.14);
+    try {
+      if (this.ctx && this.stringGain) {
+        const now = this.ctx.currentTime;
+        this.stringGain.gain.cancelScheduledValues(now);
+        this.stringGain.gain.setTargetAtTime(0.0001, now, 0.14);
+      }
+      this.updateMixGains(0.2);
+    } catch {
+      // Ignore Web Audio cleanup error
     }
-    this.updateMixGains(0.2);
   }
 
   public setIntensity(nextMode: BossMusicMode): void {
@@ -366,54 +374,66 @@ class BossMusicEngine {
     const prevMode = this.mode;
     this.mode = nextMode;
 
-    if (nextMode === 'combat' && prevMode === 'intro') {
-      // Smoothly ignite straight into full groove after intro cutscene build
-      this.buildupBarsLeft = 0;
-      this.barIndex = 0;
-      this.stepInBar = 0;
-      if (this.ctx) {
-        this.playCrash(this.ctx.currentTime + 0.02, 0.42);
+    try {
+      if (nextMode === 'combat' && prevMode === 'intro') {
+        // Smoothly ignite straight into full groove after intro cutscene build
+        this.buildupBarsLeft = 0;
+        this.barIndex = 0;
+        this.stepInBar = 0;
+        if (this.ctx && this.ctx.state === 'running') {
+          this.playCrash(this.ctx.currentTime + 0.02, 0.42);
+        }
+      } else if (nextMode === 'phase2' || nextMode === 'last_dance') {
+        if (this.bassFilterBus && this.ctx) {
+          this.bassFilterBus.frequency.setTargetAtTime(
+            nextMode === 'last_dance' ? 1280 : 1040,
+            this.ctx.currentTime,
+            0.25,
+          );
+        }
+        if (this.ctx && this.running && this.ctx.state === 'running') {
+          this.playCrash(this.ctx.currentTime + 0.02, 0.45);
+        }
+      } else if (nextMode === 'ending') {
+        if (this.ctx && this.stringFilter && this.stringGain) {
+          const now = this.ctx.currentTime;
+          this.stringFilter.frequency.setTargetAtTime(340, now, 0.3);
+          this.stringGain.gain.setTargetAtTime(0.075, now, 0.25);
+        }
       }
-    } else if (nextMode === 'phase2' || nextMode === 'last_dance') {
-      if (this.bassFilterBus && this.ctx) {
-        this.bassFilterBus.frequency.setTargetAtTime(
-          nextMode === 'last_dance' ? 1280 : 1040,
-          this.ctx.currentTime,
-          0.25,
-        );
-      }
-      if (this.ctx && this.running) {
-        this.playCrash(this.ctx.currentTime + 0.02, 0.45);
-      }
-    } else if (nextMode === 'ending') {
-      if (this.ctx && this.stringFilter && this.stringGain) {
-        const now = this.ctx.currentTime;
-        this.stringFilter.frequency.setTargetAtTime(340, now, 0.3);
-        this.stringGain.gain.setTargetAtTime(0.075, now, 0.25);
-      }
+    } catch {
+      // Ignore Web Audio scheduling errors on mode transitions
     }
   }
 
   public setMuted(muted: boolean): void {
     this.muted = muted;
-    if (!muted && this.ctx && this.running && !this.paused) {
-      if (this.ctx.state === 'suspended') {
-        void this.ctx.resume();
+    try {
+      if (!muted && this.ctx && this.running && !this.paused) {
+        if (this.ctx.state === 'suspended') {
+          void this.ctx.resume().catch(() => {});
+        }
+        this.nextStepTime = this.ctx.currentTime + 0.04;
       }
-      this.nextStepTime = this.ctx.currentTime + 0.04;
+      this.updateMixGains(0.06);
+    } catch {
+      // Ignore Web Audio state errors
     }
-    this.updateMixGains(0.06);
   }
 
   public setPaused(paused: boolean): void {
     this.paused = paused;
-    this.updateMixGains(0.08);
-    if (!this.ctx) return;
-    if (paused && this.ctx.state === 'running') {
-      void this.ctx.suspend();
-    } else if (!paused && !this.muted && this.running && this.ctx.state === 'suspended') {
-      void this.ctx.resume();
-      this.nextStepTime = this.ctx.currentTime + 0.04;
+    try {
+      this.updateMixGains(0.08);
+      if (!this.ctx) return;
+      if (paused && this.ctx.state === 'running') {
+        void this.ctx.suspend().catch(() => {});
+      } else if (!paused && !this.muted && this.running && this.ctx.state === 'suspended') {
+        void this.ctx.resume().catch(() => {});
+        this.nextStepTime = this.ctx.currentTime + 0.04;
+      }
+    } catch {
+      // Ignore Web Audio suspend/resume errors
     }
   }
 
@@ -425,15 +445,19 @@ class BossMusicEngine {
 
   private updateMixGains(tc: number): void {
     if (!this.ctx || !this.masterGain || !this.musicGain) return;
-    const now = this.ctx.currentTime;
-    const masterTarget = this.muted || this.paused || !this.running ? 0.0001 : 1.0;
-    const duckTarget = this.ducked ? 0.13 : this.mode === 'intro' ? 0.26 : 0.34;
+    try {
+      const now = this.ctx.currentTime;
+      const masterTarget = this.muted || this.paused || !this.running ? 0.0001 : 1.0;
+      const duckTarget = this.ducked ? 0.13 : this.mode === 'intro' ? 0.26 : 0.34;
 
-    this.masterGain.gain.cancelScheduledValues(now);
-    this.masterGain.gain.setTargetAtTime(masterTarget, now, tc);
+      this.masterGain.gain.cancelScheduledValues(now);
+      this.masterGain.gain.setTargetAtTime(masterTarget, now, tc);
 
-    this.musicGain.gain.cancelScheduledValues(now);
-    this.musicGain.gain.setTargetAtTime(duckTarget, now, tc);
+      this.musicGain.gain.cancelScheduledValues(now);
+      this.musicGain.gain.setTargetAtTime(duckTarget, now, tc);
+    } catch {
+      // Ignore gain automation errors
+    }
   }
 
   private getStepDurationSec(): number {
@@ -450,18 +474,24 @@ class BossMusicEngine {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
 
-    const scheduleAhead = 0.13;
-    const stepDur = this.getStepDurationSec();
+    try {
+      const scheduleAhead = 0.13;
+      const stepDur = this.getStepDurationSec();
 
-    // Prevent catch-up bursts after tab switch
-    if (this.nextStepTime < ctx.currentTime - 0.25) {
-      this.nextStepTime = ctx.currentTime + 0.03;
-    }
+      // Prevent catch-up bursts after tab switch
+      if (!Number.isFinite(this.nextStepTime) || this.nextStepTime < ctx.currentTime - 0.25) {
+        this.nextStepTime = ctx.currentTime + 0.03;
+      }
 
-    while (this.nextStepTime < ctx.currentTime + scheduleAhead) {
-      this.scheduleStep(this.nextStepTime, stepDur);
-      this.nextStepTime += stepDur;
-      this.advanceStep();
+      let steps = 0;
+      while (this.nextStepTime < ctx.currentTime + scheduleAhead && steps < 8) {
+        this.scheduleStep(this.nextStepTime, stepDur);
+        this.nextStepTime += stepDur;
+        this.advanceStep();
+        steps++;
+      }
+    } catch {
+      // Never let Web Audio scheduler crash the interval
     }
   }
 

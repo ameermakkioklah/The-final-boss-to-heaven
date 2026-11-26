@@ -95,6 +95,8 @@ export interface HudSnapshot {
   lastDanceBannerActive: boolean;
   lastDanceMode: boolean;
   cutsceneActive: boolean;
+  battleTimeMs: number;
+  battleTimerPaused: boolean;
   lastEvent: CombatEvent;
 }
 

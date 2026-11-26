@@ -607,7 +607,7 @@ export class CutsceneDirector {
   private requestDialogue(cue: DialogueCue): void {
     this.pendingCue = cue;
     this.awaitingAudioStart = true;
-    this.awaitingAudioTimer = 8.0;
+    this.awaitingAudioTimer = 2.2;
     this.activeAudioPlaying = false;
     this.postAudioPauseTimer = 0;
 
