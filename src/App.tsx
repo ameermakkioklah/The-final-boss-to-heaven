@@ -20,9 +20,11 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { CppCodePanel } from './components/CppCodePanel';
+import { DialogueBox } from './components/DialogueBox';
 import { LeaderboardPortal } from './components/LeaderboardPortal';
 import { PlayerRegistrationModal } from './components/PlayerRegistrationModal';
 import { auth, googleProvider } from './firebase';
+import type { DialogueCue } from './game/cutscene';
 import { PixelBattleEngine } from './game/engine';
 import { sound } from './game/sound';
 import {
@@ -33,6 +35,7 @@ import {
   type HudSnapshot,
   type Language,
 } from './game/types';
+import { cutsceneVoice } from './game/voice';
 import {
   fetchOnlinePlayerProfile,
   formatDurationMs,
@@ -110,6 +113,7 @@ const COPY = {
     pausedTitle: 'اللعبة متوقفة',
     resumeBtn: 'استئناف',
     restartBtn: 'إعادة المعركة',
+    replayIntroBtn: 'إعادة مشهد البداية',
     titleMenuBtn: 'القائمة الرئيسية',
     warriorWins: 'فاز المحارب! (انتصار)',
     dragonWins: 'فاز التنين! (هزيمة)',
@@ -196,6 +200,7 @@ const COPY = {
     pausedTitle: 'Paused',
     resumeBtn: 'Resume',
     restartBtn: 'Restart Battle',
+    replayIntroBtn: 'Replay Intro Cutscene',
     titleMenuBtn: 'Title Screen',
     warriorWins: 'Warrior Wins! (Victory)',
     dragonWins: 'Dragon Wins! (Defeat)',
@@ -347,6 +352,8 @@ export default function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [isSubmittingMatch, setIsSubmittingMatch] = useState(false);
 
+  const [dialogueCue, setDialogueCue] = useState<DialogueCue | null>(null);
+
   const [hud, setHud] = useState<HudSnapshot>({
     warriorHp: BATTLE_CONFIG.warriorBaseHp,
     warriorMaxHp: BATTLE_CONFIG.warriorBaseHp,
@@ -375,6 +382,7 @@ export default function App() {
     lastDanceCinematic: false,
     lastDanceBannerActive: false,
     lastDanceMode: false,
+    cutsceneActive: false,
     lastEvent: { type: 'ready' },
   });
 
@@ -563,10 +571,15 @@ export default function App() {
       onBattleEnd: (battleSummary) => {
         handleBattleEndRef.current(battleSummary);
       },
+      onDialogueChange: (cue) => {
+        setDialogueCue(cue);
+      },
     });
     engineRef.current = engine;
     engine.start();
+    cutsceneVoice.preloadCutsceneVoices();
     return () => {
+      cutsceneVoice.stopSpeech();
       engine.stop();
       engineRef.current = null;
     };
@@ -577,6 +590,9 @@ export default function App() {
     if (!engine) return;
     engine.setTitleMode(gameState === 'TITLE');
     engine.setPaused(gameState === 'PAUSED');
+    if (gameState !== 'PLAYING') {
+      cutsceneVoice.stopSpeech();
+    }
   }, [gameState]);
 
   const formatAuthActionError = useCallback(
@@ -738,6 +754,7 @@ export default function App() {
     setMuted((prev) => {
       const next = !prev;
       sound.setMuted(next);
+      cutsceneVoice.setMuted(next);
       if (!next) sound.playUiTick();
       return next;
     });
@@ -748,33 +765,40 @@ export default function App() {
     setLang((prev) => (prev === 'ar' ? 'en' : 'ar'));
   }, []);
 
-  const startNewBattle = useCallback(() => {
-    if (!activeSession) {
-      setRegModalOpen(true);
-      return;
-    }
-    sound.playUiTick();
-    engineRef.current?.resetBattle();
-    setSummary({
-      winner: null,
-      durationSec: 0,
-      durationMs: 0,
-      damageDealt: 0,
-      damageTaken: 0,
-      totalHealed: 0,
-      attacksLanded: 0,
-      critsLanded: 0,
-      parriesLanded: 0,
-    });
-    setGameState('PLAYING');
-    window.requestAnimationFrame(() => {
-      gameStageRef.current?.focus({ preventScroll: true });
-    });
-  }, [activeSession]);
+  const startNewBattle = useCallback(
+    (forceReplayIntro = false) => {
+      if (!activeSession) {
+        setRegModalOpen(true);
+        return;
+      }
+      sound.playUiTick();
+      setDialogueCue(null);
+      cutsceneVoice.preloadCutsceneVoices();
+      engineRef.current?.resetBattle(forceReplayIntro === true);
+      setSummary({
+        winner: null,
+        durationSec: 0,
+        durationMs: 0,
+        damageDealt: 0,
+        damageTaken: 0,
+        totalHealed: 0,
+        attacksLanded: 0,
+        critsLanded: 0,
+        parriesLanded: 0,
+      });
+      setGameState('PLAYING');
+      window.requestAnimationFrame(() => {
+        gameStageRef.current?.focus({ preventScroll: true });
+      });
+    },
+    [activeSession],
+  );
 
   const returnToTitle = useCallback(() => {
     sound.playUiTick();
-    engineRef.current?.resetBattle();
+    cutsceneVoice.stopSpeech();
+    setDialogueCue(null);
+    engineRef.current?.setTitleMode(true);
     setSummary({
       winner: null,
       durationSec: 0,
@@ -812,7 +836,7 @@ export default function App() {
       if (gameState === 'TITLE' || gameState === 'GAME_OVER') {
         if (code === 'Enter' || code === 'NumpadEnter' || code === 'Space') {
           e.preventDefault();
-          startNewBattle();
+          startNewBattle(false);
         }
         return;
       }
@@ -1080,7 +1104,7 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={startNewBattle}
+                    onClick={() => startNewBattle(false)}
                     className="mt-6 h-11 px-7 border-2 border-amber-300 bg-[#d9483b] hover:bg-[#eb594b] active:translate-y-0.5 text-white font-bold text-sm sm:text-base tracking-wide pixel-frame transition-transform duration-150 cursor-pointer whitespace-nowrap"
                   >
                     {t.startBtn}
@@ -1115,11 +1139,20 @@ export default function App() {
               </div>
             )}
 
+            {/* CUTSCENE SUBTITLES & DYNAMIC BOSS BANTER */}
+            {gameState === 'PLAYING' && (
+              <DialogueBox
+                cue={dialogueCue}
+                cutsceneLocked={hud.cutsceneActive}
+                onSkipCutscene={() => engineRef.current?.skipCutscene()}
+              />
+            )}
+
             {/* ACTIVE GAMEPLAY HUD */}
             {gameState !== 'TITLE' && (
               <div
                 className={`absolute inset-0 z-10 flex flex-col justify-between pointer-events-none p-2.5 sm:p-4 transition-opacity duration-200 ${
-                  hud.lastDanceCinematic ? 'opacity-20' : 'opacity-100'
+                  hud.lastDanceCinematic || hud.cutsceneActive ? 'opacity-15' : 'opacity-100'
                 }`}
               >
                 {/* Top Perimeter Status Clusters */}
@@ -1513,11 +1546,19 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={startNewBattle}
+                      onClick={() => startNewBattle(false)}
                       className="h-10 px-4 border-2 border-[#473d61] bg-[#241c38] hover:border-amber-400 text-[#f4efe6] font-bold text-sm flex items-center justify-center gap-2 transition-colors duration-150 cursor-pointer whitespace-nowrap"
                     >
                       <RotateCcw className="w-4 h-4" />
                       <span>{t.restartBtn}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => startNewBattle(true)}
+                      className="h-9 px-4 border border-[#473d61] bg-[#1a1429] hover:border-amber-400 text-amber-200 font-medium text-xs transition-colors duration-150 cursor-pointer whitespace-nowrap"
+                    >
+                      {t.replayIntroBtn}
                     </button>
 
                     <button
@@ -1603,7 +1644,7 @@ export default function App() {
                   <div className="mt-4 flex flex-col sm:flex-row gap-2.5 justify-center">
                     <button
                       type="button"
-                      onClick={startNewBattle}
+                      onClick={() => startNewBattle(false)}
                       className="h-11 px-6 border-2 border-amber-300 bg-[#d9483b] hover:bg-[#eb594b] text-white font-bold text-sm flex items-center justify-center gap-2 pixel-frame transition-colors duration-150 cursor-pointer whitespace-nowrap"
                     >
                       <RotateCcw className="w-4 h-4" />

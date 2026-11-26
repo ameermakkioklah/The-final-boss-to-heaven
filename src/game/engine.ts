@@ -1,3 +1,9 @@
+import {
+  CutsceneDirector,
+  type CutscenePhase,
+  type DialogueCue,
+  lerp,
+} from './cutscene';
 import { sound } from './sound';
 import {
   getGameSprites,
@@ -15,6 +21,7 @@ import {
   type SuperSkillType,
   type WeaponType,
 } from './types';
+import { cutsceneVoice } from './voice';
 
 // ~33% zoomed-out wide FOV (480x270 16:9 native pixel buffer)
 export const VIEW_WIDTH = 480;
@@ -406,6 +413,8 @@ const PIXEL_GLYPHS_7X9: Record<string, string[]> = {
 interface EngineCallbacks {
   onHudUpdate: (snapshot: HudSnapshot) => void;
   onBattleEnd: (summary: BattleSummary) => void;
+  onDialogueChange?: (cue: DialogueCue | null) => void;
+  onCutscenePhaseChange?: (phase: CutscenePhase) => void;
 }
 
 export class PixelBattleEngine {
@@ -421,6 +430,15 @@ export class PixelBattleEngine {
   private lutInfernal: Uint8Array;
   private sprites: GameSprites;
   private callbacks: EngineCallbacks;
+  private cutscene: CutsceneDirector;
+  private cutsceneBleedAccum = 0;
+  private cutsceneDecapitated = false;
+  private severedHeadX = 0;
+  private severedHeadY = 0;
+  private severedHeadVx = 0;
+  private severedHeadVy = 0;
+  private severedHeadGrounded = false;
+  private cutsceneDevoured = false;
 
   private rafId: number | null = null;
   private lastTime = 0;
@@ -663,6 +681,108 @@ export class PixelBattleEngine {
 
     this.sprites = getGameSprites();
     this.callbacks = callbacks;
+    this.cutscene = new CutsceneDirector({
+      onPhaseChange: (phase) => {
+        this.callbacks.onCutscenePhaseChange?.(phase);
+      },
+      onDialogueChange: (cue) => {
+        cutsceneVoice.speakDialogue(cue);
+        this.callbacks.onDialogueChange?.(cue);
+      },
+      onSfxTrigger: (hook) => {
+        cutsceneVoice.triggerSfx(hook);
+      },
+      onAmbushStrike: () => {
+        this.wFacing = 1;
+        this.wVx = -235;
+        this.wVy = -145;
+        this.wGrounded = false;
+        this.wHurtTimer = 0.45;
+        this.wFlashTimer = 0.14;
+        this.hitstopTimer = 0.055;
+        this.triggerDirectionalShake(-1, 0.35, 5.2, 0.28);
+        this.spawnCrystalBurst(this.wX + 16, this.wY + 12, 18);
+        this.spawnDustBurst(this.wX + 16, this.wY + WARRIOR_FEET_OFFSET, '#75f5ff');
+      },
+      onDragonDecapitate: () => {
+        this.cutsceneDecapitated = true;
+        this.wAttackDuration = 0.22;
+        this.wAttackTimer = 0.22;
+        this.wComboStep = 3;
+        this.slashSmear = {
+          active: true,
+          x: this.wFacing === 1 ? this.wX + 20 : this.wX + 12,
+          y: this.wY + 13,
+          facing: this.wFacing,
+          comboStep: 3,
+          weapon: this.wWeapon,
+          isCrit: true,
+          life: 0.2,
+          maxLife: 0.2,
+        };
+        const headX = this.dFacing === -1 ? this.dX + 8 : this.dX + WYVERN_W - 28;
+        const headY = this.dY + 10;
+        this.severedHeadX = headX;
+        this.severedHeadY = headY;
+        this.severedHeadVx = (this.dFacing === -1 ? -1 : 1) * 78;
+        this.severedHeadVy = -142;
+        this.severedHeadGrounded = false;
+        this.hitstopTimer = 0.075;
+        this.triggerDirectionalShake(this.wFacing, 0.5, 5.5, 0.3);
+        this.spawnInfernalBurst(headX + 10, headY + 8, 28);
+        this.shockwaves.push({
+          x: headX + 10,
+          y: headY + 8,
+          radius: 6,
+          maxRadius: 72,
+          life: 0.32,
+          maxLife: 0.32,
+          color: '#ffd147',
+        });
+        sound.playVictory();
+      },
+      onDragonDevour: () => {
+        this.cutsceneDevoured = true;
+        const cx = this.wX + 16;
+        const cy = this.wY + 18;
+        this.hitstopTimer = 0.06;
+        this.triggerDirectionalShake(0, 1, 5.0, 0.28);
+        this.spawnInfernalBurst(cx, cy, 24);
+        this.spawnDustBurst(cx, cy, '#dc2626');
+        this.shockwaves.push({
+          x: cx,
+          y: cy,
+          radius: 4,
+          maxRadius: 48,
+          life: 0.28,
+          maxLife: 0.28,
+          color: '#f03e52',
+        });
+      },
+      onCombatStart: () => {
+        this.wGrounded = true;
+        this.wVx = 0;
+        this.wVy = 0;
+        this.wFacing = 1;
+        this.wHurtTimer = 0;
+        this.wY = getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET;
+        this.dX = 460;
+        this.dY = 172;
+        this.dVx = 0;
+        this.dVy = 0;
+        this.dFacing = -1;
+        this.dAiState = 'reposition_glide';
+        this.dAiTimer = 0.42;
+        this.lastEvent = { type: 'ready' };
+        this.emitHud();
+      },
+      onEndingComplete: (outcome) => {
+        this.battleEnded = true;
+        this.pendingWinner = outcome;
+        this.endDelayTimer = 0.12;
+        this.emitHud();
+      },
+    });
 
     this.initCloak();
 
@@ -833,12 +953,28 @@ export class PixelBattleEngine {
 
   public setPaused(paused: boolean): void {
     this.paused = paused;
-    if (paused) this.clearHeldInputs();
+    if (paused) {
+      this.clearHeldInputs();
+      cutsceneVoice.stopSpeech();
+    }
   }
 
   public setTitleMode(isTitle: boolean): void {
     this.titleMode = isTitle;
-    if (isTitle) this.clearHeldInputs();
+    if (isTitle) {
+      this.clearHeldInputs();
+      cutsceneVoice.stopSpeech();
+      this.cutscene.resetToIdle();
+    }
+  }
+
+  public skipCutscene(): void {
+    cutsceneVoice.stopSpeech();
+    this.cutscene.skipCurrentCutscene();
+  }
+
+  public getCutscenePhase(): CutscenePhase {
+    return this.cutscene.getPhase();
   }
 
   public clearHeldInputs(): void {
@@ -854,7 +990,11 @@ export class PixelBattleEngine {
   }
 
   private isCinematicLocked(): boolean {
-    return this.wAwakeningTimer > 0 || this.lastDanceTimer > 0;
+    return (
+      this.wAwakeningTimer > 0 ||
+      this.lastDanceTimer > 0 ||
+      this.cutscene.isCutsceneLocked()
+    );
   }
 
   public setMoveLeft(held: boolean): void {
@@ -947,13 +1087,18 @@ export class PixelBattleEngine {
     return this.dPhase2Triggered ? 2 : 1; // Triple Jump (1 ground + 2 air) in Phase 2!
   }
 
-  public resetBattle(): void {
+  public resetBattle(forceReplayIntro = false): void {
+    cutsceneVoice.stopSpeech();
     this.clearHeldInputs();
     this.battleElapsed = 0;
     this.battleEnded = false;
     this.pendingWinner = null;
     this.endDelayTimer = 0;
     this.wDeathTimer = 0;
+    this.cutsceneBleedAccum = 0;
+    this.cutsceneDecapitated = false;
+    this.cutsceneDevoured = false;
+    this.severedHeadGrounded = false;
 
     this.wX = 180;
     this.wY = getBaseFloorYAt(196) - WARRIOR_FEET_OFFSET;
@@ -1090,6 +1235,21 @@ export class PixelBattleEngine {
     this.attacksLanded = 0;
     this.critsLanded = 0;
     this.parriesLanded = 0;
+
+    const initialPhase = this.cutscene.beginBattle(forceReplayIntro);
+    if (initialPhase === 'FIRST_ENTRY_WALK') {
+      this.wX = 88;
+      this.wY = getBaseFloorYAt(104) - WARRIOR_FEET_OFFSET;
+      this.wFacing = 1;
+      this.dX = 605;
+      this.dY = 112;
+      this.dFacing = -1;
+      this.dAiState = 'hover';
+      this.ldLetterbox = 1;
+      this.camX = 0;
+      this.initCloak();
+    }
+
     this.emitHud();
   }
 
@@ -1126,6 +1286,7 @@ export class PixelBattleEngine {
       lastDanceCinematic: this.lastDanceTimer > 0,
       lastDanceBannerActive: this.lastDanceTimer > 0 && this.lastDanceTimer <= 1.85,
       lastDanceMode: this.lastDanceMode,
+      cutsceneActive: this.cutscene.isCutsceneLocked(),
       lastEvent: this.lastEvent,
     });
   }
@@ -1269,7 +1430,29 @@ export class PixelBattleEngine {
       return;
     }
 
+    if (this.cutscene.isCutsceneLocked()) {
+      this.cutscene.update(dt, false);
+      this.updateCutsceneChoreography(dt);
+      this.updateCloak(dt);
+      this.updateCamera(dt);
+      this.hudSyncAccum += dt;
+      if (this.hudSyncAccum >= 0.06) {
+        this.hudSyncAccum = 0;
+        this.emitHud();
+      }
+      return;
+    }
+
     this.battleElapsed += dt;
+
+    const canBanterSpeak =
+      this.wAwakeningTimer <= 0 &&
+      this.lastDanceTimer <= 0 &&
+      !this.battleEnded &&
+      this.dAiState !== 'death_fakeout' &&
+      this.dAiState !== 'transforming' &&
+      this.dAiState !== 'dragon_react';
+    this.cutscene.update(dt, canBanterSpeak);
 
     if (this.wAwakeningTimer > 0) {
       this.updateWarriorAwakeningCinematic(dt);
@@ -1316,6 +1499,188 @@ export class PixelBattleEngine {
     if (this.hudSyncAccum >= 0.08) {
       this.hudSyncAccum = 0;
       this.emitHud();
+    }
+  }
+
+  private updateCutsceneChoreography(dt: number): void {
+    const phase = this.cutscene.getPhase();
+    const t = this.cutscene.getPhaseTime();
+    const step = this.cutscene.getStepIndex();
+
+    if (this.slashSmear.active) {
+      this.slashSmear.life -= dt;
+      if (this.slashSmear.life <= 0) this.slashSmear.active = false;
+    }
+
+    if (phase === 'FIRST_ENTRY_WALK') {
+      // Slow limping gait using sword for support
+      const limpCycle = Math.max(0, Math.sin(t * 3.6));
+      const limpSpeed = 8 + limpCycle * 18;
+      if (this.wX < 216) {
+        this.wX += limpSpeed * dt;
+        this.wVx = limpSpeed;
+        this.wWalkClock += dt * (2.6 + limpCycle * 2.8);
+      } else {
+        this.wVx = 0;
+      }
+      this.wFacing = 1;
+      this.wGrounded = true;
+      this.wY = getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET;
+
+      this.cutsceneBleedAccum += dt;
+      if (this.cutsceneBleedAccum >= 0.26) {
+        this.cutsceneBleedAccum = 0;
+        this.pushParticle({
+          x: this.wX + 12 + Math.random() * 7,
+          y: this.wY + 13 + Math.random() * 4,
+          vx: -4 + Math.random() * 8,
+          vy: 12 + Math.random() * 18,
+          life: 0.48,
+          maxLife: 0.48,
+          color: Math.random() < 0.5 ? '#b91c1c' : '#ef4444',
+          size: 1,
+          gravity: 120,
+        });
+      }
+      return;
+    }
+
+    if (phase === 'DRAGON_AMBUSH') {
+      this.wFacing = 1;
+      if (step === 0) {
+        // Dragon descends gracefully into view while delivering condescending pity
+        this.dFacing = -1;
+        this.dX = lerp(this.dX, 372, Math.min(1, 2.2 * dt));
+        this.dY = lerp(this.dY, 138 + Math.sin(t * 3) * 4, Math.min(1, 2.8 * dt));
+        this.wVx = 0;
+        this.wY = getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET;
+      } else if (step === 1) {
+        // Blinding-speed blink/teleport directly before the Warrior!
+        const prevX = this.dX;
+        const targetDX = this.wX + 26;
+        const targetDY = this.wY - 14;
+        if (Math.abs(prevX - targetDX) > 25) {
+          for (let k = 0; k < 5; k++) {
+            this.wyvernTrails.push({
+              x: lerp(prevX, targetDX, k / 5),
+              y: lerp(this.dY, targetDY, k / 5),
+              facing: -1,
+              infernal: this.dPhase2Triggered,
+              life: 0.28,
+              maxLife: 0.28,
+            });
+          }
+        }
+        this.dX = targetDX;
+        this.dY = targetDY;
+        this.dFacing = -1;
+        this.dAiState = 'p2_blink_ambush';
+      } else {
+        // Warrior launched backward after the ambush blow
+        if (this.wHurtTimer > 0) this.wHurtTimer = Math.max(0, this.wHurtTimer - dt);
+        if (this.wFlashTimer > 0) this.wFlashTimer = Math.max(0, this.wFlashTimer - dt);
+        this.wVy = Math.min(395, this.wVy + 640 * dt);
+        this.wX = Math.max(44, this.wX + this.wVx * dt);
+        this.wY += this.wVy * dt;
+        const floorY = getBaseFloorYAt(this.wX + 16);
+        if (this.wY + WARRIOR_FEET_OFFSET >= floorY) {
+          this.wY = floorY - WARRIOR_FEET_OFFSET;
+          this.wVy = 0;
+          this.wVx *= Math.pow(0.05, dt);
+          this.wGrounded = true;
+        }
+        this.dX = lerp(this.dX, 420, Math.min(1, 3.2 * dt));
+        this.dY = lerp(this.dY, 160, Math.min(1, 3.2 * dt));
+        this.dAiState = 'hover';
+      }
+      return;
+    }
+
+    if (phase === 'WARRIOR_RECOVER_3S') {
+      this.wVx = 0;
+      this.wVy = 0;
+      this.wGrounded = true;
+      this.wFacing = 1;
+      this.wY = getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET;
+      this.dX = lerp(this.dX, 442, Math.min(1, 2.5 * dt));
+      this.dY = lerp(this.dY, 166 + Math.sin(t * 2.5) * 4, Math.min(1, 2.5 * dt));
+      this.dFacing = -1;
+      return;
+    }
+
+    if (phase === 'VICTORY_CUTSCENE') {
+      this.dAiState = 'defeated';
+      this.dVx = 0;
+      this.dVy = 0;
+      const dFloorY = getBaseFloorYAt(this.dX + WYVERN_W * 0.5) - WYVERN_H + 10;
+      this.dY = lerp(this.dY, dFloorY, Math.min(1, 4 * dt));
+
+      const headSideX = this.dFacing === -1 ? this.dX - 10 : this.dX + WYVERN_W - 22;
+      this.wFacing = this.dFacing === -1 ? 1 : -1;
+
+      if (step === 0) {
+        const dist = headSideX - this.wX;
+        if (Math.abs(dist) > 3) {
+          const move = Math.sign(dist) * Math.min(Math.abs(dist), 42 * dt);
+          this.wX += move;
+          this.wVx = Math.sign(dist) * 42;
+          this.wWalkClock += dt * 7;
+        } else {
+          this.wVx = 0;
+        }
+        this.wGrounded = true;
+        this.wY = getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET;
+      } else if (step === 1) {
+        this.wVx = 0;
+        this.wGrounded = true;
+        this.wY = getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET;
+      } else {
+        if (this.wAttackTimer > 0) this.wAttackTimer = Math.max(0, this.wAttackTimer - dt);
+        if (this.cutsceneDecapitated && !this.severedHeadGrounded) {
+          this.severedHeadVy += 460 * dt;
+          this.severedHeadX += this.severedHeadVx * dt;
+          this.severedHeadY += this.severedHeadVy * dt;
+          const groundY = getBaseFloorYAt(this.severedHeadX + 10) - 16;
+          if (this.severedHeadY >= groundY) {
+            this.severedHeadY = groundY;
+            if (Math.abs(this.severedHeadVy) > 55) {
+              this.severedHeadVy = -this.severedHeadVy * 0.35;
+              this.severedHeadVx *= 0.45;
+              this.spawnDustBurst(this.severedHeadX + 10, groundY + 14, '#ef4444');
+            } else {
+              this.severedHeadVy = 0;
+              this.severedHeadVx = 0;
+              this.severedHeadGrounded = true;
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    if (phase === 'DEFEAT_CUTSCENE') {
+      this.wVx = 0;
+      this.wGrounded = true;
+      this.wY = lerp(this.wY, getBaseFloorYAt(this.wX + 16) - WARRIOR_FEET_OFFSET, Math.min(1, 8 * dt));
+      this.wDeathTimer += dt;
+
+      if (step === 0) {
+        // Dragon laughs loudly and swoops down close to the Warrior's fallen body
+        const targetX = this.wX - 18;
+        const targetY = this.wY - 22;
+        this.dFacing = this.wX + 16 >= this.dX + WYVERN_W * 0.5 ? 1 : -1;
+        this.dX = lerp(this.dX, targetX, Math.min(1, 3.2 * dt));
+        this.dY = lerp(this.dY, targetY, Math.min(1, 3.2 * dt));
+        this.dAiState = 'hover';
+      } else if (step === 1) {
+        this.dAiState = 'p2_vortex_bite';
+        this.dX = lerp(this.dX, this.wX - 16, Math.min(1, 5 * dt));
+        this.dY = lerp(this.dY, this.wY - 12, Math.min(1, 5 * dt));
+      } else {
+        this.dAiState = 'hover';
+        this.dX = lerp(this.dX, this.wX - 10, Math.min(1, 2.2 * dt));
+        this.dY = lerp(this.dY, this.wY - 46 + Math.sin(t * 2.2) * 3, Math.min(1, 2.4 * dt));
+      }
     }
   }
 
@@ -1891,6 +2256,24 @@ export class PixelBattleEngine {
     const dCenter = this.getDragonCoreCenter();
     const dist = Math.abs(dCenter.x - wCenterX);
 
+    if (this.cutscene.isCutsceneLocked()) {
+      const phase = this.cutscene.getPhase();
+      let focusX = wCenterX;
+      let focusY = this.wY + 10;
+      if (phase === 'DRAGON_AMBUSH' || phase === 'VICTORY_CUTSCENE' || phase === 'DEFEAT_CUTSCENE') {
+        focusX = wCenterX * 0.52 + dCenter.x * 0.48;
+        focusY = (this.wY + 12) * 0.55 + dCenter.y * 0.45;
+      }
+      const targetX = Math.max(0, Math.min(WORLD_WIDTH - VIEW_WIDTH, focusX - VIEW_WIDTH / 2));
+      const targetY = Math.max(0, Math.min(WORLD_HEIGHT - VIEW_HEIGHT, focusY - VIEW_HEIGHT * 0.62));
+      const smooth = 1 - Math.exp(-5.5 * dt);
+      this.camX += (targetX - this.camX) * smooth;
+      this.camY += (targetY - this.camY) * smooth;
+      this.ldZoom += (1 - this.ldZoom) * Math.min(1, 6 * dt);
+      this.ldLetterbox += (1 - this.ldLetterbox) * Math.min(1, 6 * dt);
+      return;
+    }
+
     if (this.lastDanceTimer > 0) {
       const midX = (wCenterX + dCenter.x) * 0.5 - VIEW_WIDTH / 2;
       const midY = (this.wY + 12 + dCenter.y) * 0.5 - VIEW_HEIGHT * 0.56;
@@ -2080,6 +2463,7 @@ export class PixelBattleEngine {
           '#34d399',
           2
         );
+        this.cutscene.notifyCombatEvent('player_heal', true);
         this.emitHud();
       }
     }
@@ -2262,6 +2646,7 @@ export class PixelBattleEngine {
 
     // STRICT CLOSE-RANGE MELEE HITBOX CHECK
     if (this.wAttackTimer > 0) {
+      const prevAttackTimer = this.wAttackTimer;
       this.wAttackTimer = Math.max(0, this.wAttackTimer - dt);
       const inHitWindow =
         this.wAttackTimer <= this.wAttackDuration * 0.86 &&
@@ -2282,6 +2667,10 @@ export class PixelBattleEngine {
           this.wAttackHitDone = true;
           this.resolveWarriorHitDragon(contact.x, contact.y);
         }
+      }
+
+      if (prevAttackTimer > 0 && this.wAttackTimer === 0 && !this.wAttackHitDone) {
+        this.cutscene.notifyCombatEvent('player_miss', true);
       }
     }
 
@@ -2438,11 +2827,22 @@ export class PixelBattleEngine {
       this.dAiState = 'defeated';
       this.dVx = 0;
       this.dVy = 0;
-      this.battleEnded = true;
-      this.pendingWinner = 'warrior';
-      this.endDelayTimer = 1.25;
-      sound.playVictory();
+      this.shards = [];
+      this.flamePillars = [];
+      this.emberOrbs = [];
+      this.bossWaves = [];
       this.spawnInfernalBurst(core.x, core.y, 40);
+
+      const startedCutscene = this.cutscene.beginEnding('warrior');
+      if (!startedCutscene) {
+        this.battleEnded = true;
+        this.pendingWinner = 'warrior';
+        this.endDelayTimer = 1.25;
+        sound.playVictory();
+      } else {
+        this.clearHeldInputs();
+        this.emitHud();
+      }
     }
   }
 
@@ -2550,6 +2950,10 @@ export class PixelBattleEngine {
     }
     this.emitHud();
 
+    if (this.wHp > 0 && remaining > 0) {
+      this.cutscene.notifyCombatEvent('player_hit', true);
+    }
+
     if (this.wHp <= 0) {
       // Warrior Phase 2 Death -> One-time Cinematic Flame Awakening (500 HP) + Dragon Furious Reaction!
       if (this.dPhase2Triggered && !this.wAwakened) {
@@ -2581,12 +2985,23 @@ export class PixelBattleEngine {
         return;
       }
 
-      this.battleEnded = true;
-      this.pendingWinner = 'dragon';
+      this.shards = [];
+      this.flamePillars = [];
+      this.emberOrbs = [];
+      this.bossWaves = [];
       this.wDeathTimer = 0;
-      this.endDelayTimer = 1.15;
-      sound.playDefeat();
       this.spawnDustBurst(this.wX + 16, this.wY + WARRIOR_FEET_OFFSET, '#68e3ff');
+
+      const startedCutscene = this.cutscene.beginEnding('dragon');
+      if (!startedCutscene) {
+        this.battleEnded = true;
+        this.pendingWinner = 'dragon';
+        this.endDelayTimer = 1.15;
+        sound.playDefeat();
+      } else {
+        this.clearHeldInputs();
+        this.emitHud();
+      }
     }
   }
 
@@ -5598,8 +6013,29 @@ export class PixelBattleEngine {
       }
     }
 
-    // Draw 32x32 Bearded Warrior (or Awakened Blazing Aura)
-    if (this.wHp <= 0 && !this.wAwakeningTimer) {
+    const cPhase = this.cutscene.getPhase();
+    const cTime = this.cutscene.getPhaseTime();
+    const isIntroWalk = cPhase === 'FIRST_ENTRY_WALK';
+    const isRecoverSit = cPhase === 'WARRIOR_RECOVER_3S' && cTime < 2.35;
+    const isDefeatCutscene = cPhase === 'DEFEAT_CUTSCENE';
+
+    // Draw 32x32 Bearded Warrior (or Awakened Blazing Aura / Cutscene Poses)
+    if (isDefeatCutscene) {
+      if (!this.cutsceneDevoured) {
+        // Warrior collapsed flat on the ground before the Dragon devours them
+        ctx.save();
+        ctx.translate(Math.round(this.wX + 16), Math.round(this.wY + WARRIOR_FEET_OFFSET - 4));
+        ctx.rotate(-Math.PI / 2);
+        ctx.drawImage(this.sprites.warrior.hurt.canvas, -16, -16);
+        ctx.restore();
+        ctx.fillStyle = '#991b1b';
+        ctx.fillRect(Math.round(this.wX + 6), Math.round(this.wY + WARRIOR_FEET_OFFSET - 2), 18, 2);
+      } else {
+        // Bloodstain remains where the Warrior was consumed
+        ctx.fillStyle = '#7f1d1d';
+        ctx.fillRect(Math.round(this.wX + 8), Math.round(this.wY + WARRIOR_FEET_OFFSET - 2), 14, 2);
+      }
+    } else if (this.wHp <= 0 && !this.wAwakeningTimer) {
       if (this.wDeathTimer < 0.2) {
         ctx.drawImage(this.sprites.warrior.hurt.flashCanvas, Math.round(this.wX), Math.round(this.wY));
       } else if (this.wDeathTimer < 1.05) {
@@ -5629,7 +6065,7 @@ export class PixelBattleEngine {
         let wSheet = idleFrame === 0 ? this.sprites.warrior.idle0 : this.sprites.warrior.idle1;
         let rollFlipY = false;
 
-        if (this.wAwakeningTimer > 1.15) {
+        if (this.wAwakeningTimer > 1.15 || isRecoverSit) {
           wSheet = this.sprites.warrior.hurt;
         } else if (this.wRollTimer > 0) {
           const spinIdx = Math.floor(this.elapsed * 24) % 4;
@@ -5641,7 +6077,7 @@ export class PixelBattleEngine {
           wSheet = this.sprites.warrior.attack;
         } else if (!this.wGrounded) {
           wSheet = this.sprites.warrior.jump;
-        } else if (Math.abs(this.wVx) > 12) {
+        } else if (Math.abs(this.wVx) > 12 || (isIntroWalk && Math.abs(this.wVx) > 2)) {
           const runStep = Math.floor(this.wWalkClock) % 4;
           wSheet =
             runStep === 0
@@ -5653,16 +6089,27 @@ export class PixelBattleEngine {
 
         const wSource = this.wFlashTimer > 0 ? wSheet.flashCanvas : wSheet.canvas;
         const drawX = Math.round(this.wX);
-        const drawY = Math.round(this.wY);
+        const drawY = Math.round(this.wY + (isRecoverSit ? 5 : isIntroWalk ? 2 : 0));
 
         ctx.save();
         ctx.translate(drawX + (this.wFacing === -1 ? 32 : 0), drawY + (rollFlipY ? 32 : 0));
         ctx.scale(this.wFacing === -1 ? -1 : 1, rollFlipY ? -1 : 1);
         ctx.drawImage(wSource, 0, 0);
 
+        if (isIntroWalk) {
+          // Bleeding chest/shoulder smudges & sword braced downward as a crutch
+          ctx.fillStyle = '#dc2626';
+          ctx.fillRect(13, 12, 3, 2);
+          ctx.fillRect(15, 15, 2, 4);
+          ctx.fillRect(11, 18, 2, 2);
+        }
+
         if (this.wRollTimer <= 0 && this.wAwakeningTimer <= 1.15) {
           const weaponSet = this.getWeaponSprite(this.wWeapon);
-          if (this.wParryTimer > 0) {
+          if (isIntroWalk) {
+            // Sword tip pressed toward ground for exhausted support
+            ctx.drawImage(weaponSet.swingDown.canvas, 10, 8);
+          } else if (this.wParryTimer > 0) {
             ctx.drawImage(this.sprites.weapons.shield.canvas, 20, 10);
           } else if (this.wAttackTimer > 0) {
             // Crisp pre-baked nearest-neighbor weapon poses (zero ctx.rotate mixels!)
@@ -5676,7 +6123,9 @@ export class PixelBattleEngine {
             ctx.drawImage(atkSheet.canvas, ox, oy);
           } else {
             ctx.drawImage(weaponSet.idle.canvas, 14, 4);
-            ctx.drawImage(this.sprites.weapons.shield.canvas, 17, 13);
+            if (!isRecoverSit) {
+              ctx.drawImage(this.sprites.weapons.shield.canvas, 17, 13);
+            }
           }
         }
         ctx.restore();
@@ -5760,11 +6209,33 @@ export class PixelBattleEngine {
       if (this.dFacing === 1) {
         ctx.translate(dDrawX + WYVERN_W, dDrawY);
         ctx.scale(-1, 1);
-        ctx.drawImage(dSource, 0, 0);
+        if (this.cutsceneDecapitated) {
+          // Clip off the Dragon's head section from its defeated torso
+          ctx.drawImage(dSource, 24, 0, WYVERN_W - 24, WYVERN_H, 24, 0, WYVERN_W - 24, WYVERN_H);
+        } else {
+          ctx.drawImage(dSource, 0, 0);
+        }
+      } else if (this.cutsceneDecapitated) {
+        ctx.drawImage(dSource, 24, 0, WYVERN_W - 24, WYVERN_H, dDrawX + 24, dDrawY, WYVERN_W - 24, WYVERN_H);
       } else {
         ctx.drawImage(dSource, dDrawX, dDrawY);
       }
       ctx.restore();
+
+      // Draw severed Dragon head tumbling / resting on the arena floor after Victory decapitation
+      if (this.cutsceneDecapitated) {
+        ctx.save();
+        const hx = Math.round(this.severedHeadX);
+        const hy = Math.round(this.severedHeadY);
+        if (this.dFacing === 1) {
+          ctx.translate(hx + 24, hy);
+          ctx.scale(-1, 1);
+          ctx.drawImage(dSource, 0, 4, 24, 26, 0, 0, 24, 26);
+        } else {
+          ctx.drawImage(dSource, 0, 4, 24, 26, hx, hy, 24, 26);
+        }
+        ctx.restore();
+      }
 
       if (this.dAiState === 'transforming') {
         const core = this.getDragonCoreCenter();

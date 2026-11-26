@@ -1399,6 +1399,146 @@ class RealisticBattleAudioEngine {
       osc.stop(start + d + 0.02);
     });
   }
+
+  // Sinister multi-syllable echoing Dragon laugh ("HAA-HA-HA-HAA")
+  public playDragonLaugh(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const bursts = [
+      { t: 0.0, f: 112, dur: 0.22 },
+      { t: 0.24, f: 96, dur: 0.2 },
+      { t: 0.47, f: 84, dur: 0.22 },
+      { t: 0.72, f: 74, dur: 0.36 },
+    ];
+    bursts.forEach(({ t, f, dur }) => {
+      const t0 = now + t;
+      const osc = ctx.createOscillator();
+      const sub = ctx.createOscillator();
+      const shaper = ctx.createWaveShaper();
+      const bp = ctx.createBiquadFilter();
+      const g = ctx.createGain();
+
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(f * 1.18, t0);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.72, t0 + dur);
+
+      sub.type = 'triangle';
+      sub.frequency.setValueAtTime(f * 0.55, t0);
+      sub.frequency.exponentialRampToValueAtTime(f * 0.38, t0 + dur);
+
+      shaper.curve = this.getDistortionCurve();
+      bp.type = 'bandpass';
+      bp.Q.value = 1.8;
+      bp.frequency.setValueAtTime(460, t0);
+      bp.frequency.linearRampToValueAtTime(250, t0 + dur);
+
+      g.gain.setValueAtTime(0.001, t0);
+      g.gain.linearRampToValueAtTime(0.17, t0 + 0.035);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+
+      osc.connect(shaper);
+      sub.connect(shaper);
+      shaper.connect(bp);
+      bp.connect(g);
+      g.connect(ctx.destination);
+
+      osc.start(t0);
+      sub.start(t0);
+      osc.stop(t0 + dur + 0.02);
+      sub.stop(t0 + dur + 0.02);
+    });
+  }
+
+  // Low gritty Warrior chuckle before rising
+  public playWarriorChuckle(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [0, 0.16, 0.32].forEach((offset, idx) => {
+      const t0 = now + offset;
+      const osc = ctx.createOscillator();
+      const lp = ctx.createBiquadFilter();
+      const g = ctx.createGain();
+      osc.type = 'sawtooth';
+      const base = 115 - idx * 8;
+      osc.frequency.setValueAtTime(base, t0);
+      osc.frequency.exponentialRampToValueAtTime(base * 0.78, t0 + 0.11);
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(520, t0);
+      g.gain.setValueAtTime(0.001, t0);
+      g.gain.linearRampToValueAtTime(0.09, t0 + 0.025);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.12);
+      osc.connect(lp);
+      lp.connect(g);
+      g.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.13);
+    });
+  }
+
+  // Faint metallic sword scrape on stone during exhausted walk
+  public playBladeScrape(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.getNoiseBuffer(ctx);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 4.0;
+    bp.frequency.setValueAtTime(1650, now);
+    bp.frequency.linearRampToValueAtTime(1120, now + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.045, now + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(ctx.destination);
+    src.start(now, 0.15, 0.2);
+  }
+
+  // Heavy fatal steel severing slash for Warrior Victory cutscene
+  public playDecapitateSlash(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    this.playComboSlash(3, true, 'katana');
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(32, now + 0.38);
+    g.gain.setValueAtTime(0.26, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.42);
+  }
+
+  // Visceral jaw snap + devour crunch for Dragon Defeat cutscene
+  public playDragonDevour(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    this.playDragonSnarl(true);
+    const now = ctx.currentTime;
+    const noiseBuf = this.getNoiseBuffer(ctx);
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(980, now + 0.05);
+    lp.frequency.exponentialRampToValueAtTime(180, now + 0.35);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.28, now + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    src.connect(lp);
+    lp.connect(g);
+    g.connect(ctx.destination);
+    src.start(now + 0.04, 0.1, 0.38);
+  }
 }
 
 export const sound = new RealisticBattleAudioEngine();

@@ -94,6 +94,7 @@ export interface HudSnapshot {
   lastDanceCinematic: boolean;
   lastDanceBannerActive: boolean;
   lastDanceMode: boolean;
+  cutsceneActive: boolean;
   lastEvent: CombatEvent;
 }
 
