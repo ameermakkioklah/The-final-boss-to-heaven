@@ -37,6 +37,7 @@ export class CutsceneVoiceController {
   private preloaded = false;
   private voiceApiDisabled = false;
   private lastVoiceError: string | null = null;
+  private reportedErrorOnce = false;
 
   private ensureAudioContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -55,6 +56,11 @@ export class CutsceneVoiceController {
 
   private getCacheKey(cue: DialogueCue): string {
     return `${cue.speaker}:${cue.id}:${cue.text}`;
+  }
+
+  private getStaticVoiceUrl(cue: DialogueCue): string {
+    const cleanId = cue.id.replace(/_\d+$/, '').replace(/[^a-zA-Z0-9_-]/g, '');
+    return `/voices/${cleanId}.wav`;
   }
 
   public getLastVoiceError(): string | null {
@@ -83,15 +89,48 @@ export class CutsceneVoiceController {
   }
 
   public preloadCutsceneVoices(): void {
-    if (this.preloaded || this.voiceApiDisabled || typeof window === 'undefined') return;
+    if (this.preloaded || typeof window === 'undefined') return;
     this.preloaded = true;
 
-    // Only preload opening intro lines when the player has not seen the intro yet, preserving TTS quota
+    // Warm static baked WAV assets first (zero API quota usage)
     const flags = loadCutsceneFlags();
-    if (flags.hasSeenIntroCutscene) return;
+    if (!flags.hasSeenIntroCutscene) {
+      const introCues = CORE_CUTSCENE_VOICE_CUES.slice(0, 4);
+      void Promise.allSettled(introCues.map((cue) => this.tryLoadStaticWav(cue)));
+    }
+  }
 
-    const priorityCues = CORE_CUTSCENE_VOICE_CUES.slice(0, 3);
-    void Promise.allSettled(priorityCues.map((cue) => this.fetchAndDecodeCue(cue)));
+  private async tryLoadStaticWav(cue: DialogueCue): Promise<ArrayBuffer | null> {
+    const key = this.getCacheKey(cue);
+    const cached = this.rawCache.get(key);
+    if (cached) return cached;
+
+    try {
+      const resp = await fetch(this.getStaticVoiceUrl(cue));
+      if (!resp.ok) return null;
+      const contentType = resp.headers.get('content-type') || '';
+      // Reject SPA HTML index fallback if the static .wav file does not exist
+      if (contentType.includes('text/html')) return null;
+
+      const buf = await resp.arrayBuffer();
+      if (buf.byteLength < 44) return null;
+
+      // Verify RIFF WAV header
+      const header = new Uint8Array(buf, 0, 4);
+      if (
+        header[0] !== 0x52 || // R
+        header[1] !== 0x49 || // I
+        header[2] !== 0x46 || // F
+        header[3] !== 0x46    // F
+      ) {
+        return null;
+      }
+
+      this.rawCache.set(key, buf);
+      return buf;
+    } catch {
+      return null;
+    }
   }
 
   public triggerSfx(hook: CutsceneSfxHook): void {
@@ -171,9 +210,6 @@ export class CutsceneVoiceController {
   }
 
   private async fetchOrGetRawWav(cue: DialogueCue): Promise<FetchResult> {
-    if (this.voiceApiDisabled) {
-      return { buffer: null, error: this.lastVoiceError || 'Voice API disabled.' };
-    }
     const key = this.getCacheKey(cue);
     const cachedRaw = this.rawCache.get(key);
     if (cachedRaw) return { buffer: cachedRaw };
@@ -183,6 +219,17 @@ export class CutsceneVoiceController {
 
     const promise = (async (): Promise<FetchResult> => {
       try {
+        // 1. Always check static baked /voices/*.wav first (works on static hosts & burns 0 quota)
+        const staticBuf = await this.tryLoadStaticWav(cue);
+        if (staticBuf) {
+          return { buffer: staticBuf };
+        }
+
+        if (this.voiceApiDisabled) {
+          return { buffer: null, error: this.lastVoiceError || 'Voice API unavailable on this host.' };
+        }
+
+        // 2. Otherwise synthesize dynamically via /api/voice backend
         const resp = await fetch('/api/voice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -200,18 +247,23 @@ export class CutsceneVoiceController {
             const errJson = (await resp.json()) as { error?: string };
             if (errJson?.error) errMsg = errJson.error;
           } catch {
-            // Keep default HTTP message
+            // Non-JSON response (e.g. static host 404 HTML page)
           }
-          if (resp.status === 503 || resp.status === 429) {
+
+          if (resp.status === 404) {
+            this.voiceApiDisabled = true;
             this.lastVoiceError =
-              resp.status === 429
-                ? 'Gemini TTS daily quota reached (429). Check Settings > Secrets for a billing-enabled API key or try again after quota resets.'
-                : errMsg;
-            if (resp.status === 503) {
-              this.voiceApiDisabled = true;
-            }
+              'Live /api/voice backend is not mounted on this static host (404). Open via AI Studio preview or deploy with api/voice + GEMINI_API_KEY.';
+          } else if (resp.status === 503) {
+            this.voiceApiDisabled = true;
+            this.lastVoiceError = errMsg;
+          } else if (resp.status === 429) {
+            this.lastVoiceError =
+              'Gemini TTS rate/daily quota reached (429). Wait ~1 minute or check Settings > Secrets.';
+          } else {
+            this.lastVoiceError = errMsg;
           }
-          return { buffer: null, error: this.lastVoiceError || errMsg };
+          return { buffer: null, error: this.lastVoiceError };
         }
 
         const json = (await resp.json()) as { audioBase64?: string };
@@ -255,12 +307,12 @@ export class CutsceneVoiceController {
         this.playProcessedAudioBuffer(ctx, buffer, cue, nonce, callbacks);
         return;
       }
-      if (error) {
+      if (error && !this.reportedErrorOnce) {
+        this.reportedErrorOnce = true;
         callbacks?.onError?.(error);
       }
     }
 
-    // Never fall back to robotic browser speechSynthesis; keep subtitles timed cleanly with SFX cues
     if (nonce === this.activeCueNonce) {
       callbacks?.onStarted?.(cue.id, cue.durationSec);
       globalThis.setTimeout(() => {
