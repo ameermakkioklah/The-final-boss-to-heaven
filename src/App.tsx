@@ -579,6 +579,35 @@ export default function App() {
     engine.setPaused(gameState === 'PAUSED');
   }, [gameState]);
 
+  const formatAuthActionError = useCallback(
+    (err: unknown): string => {
+      const raw = err instanceof Error ? err.message : 'Unable to complete Google sign-in.';
+      if (raw.includes('auth/unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+        return lang === 'ar'
+          ? `هذا النطاق (${host}) غير مضاف في النطاقات المصرح بها بـ Firebase Auth. أضفه في Firebase Console -> Authentication -> Settings -> Authorized domains، أو العب محلياً مؤقتاً.`
+          : `Domain "${host}" is not authorized in Firebase Auth yet. Add "${host}" under Firebase Console -> Authentication -> Settings -> Authorized domains (project: solar-canyon-qbcxw).`;
+      }
+      if (raw.includes('auth/popup-closed-by-user')) {
+        return lang === 'ar'
+          ? 'تم إغلاق نافذة تسجيل الدخول قبل إكمال العملية.'
+          : 'Sign-in window was closed before completing authentication.';
+      }
+      if (raw.includes('auth/popup-blocked')) {
+        return lang === 'ar'
+          ? 'المتصفح منع النافذة المنبثقة لتسجيل الدخول. يرجى السماح بالنوافذ المنبثقة والمحاولة مجدداً.'
+          : 'Browser blocked the sign-in popup. Please allow popups for this site and try again.';
+      }
+      try {
+        const parsed = JSON.parse(raw) as { error?: string };
+        return parsed?.error || raw;
+      } catch {
+        return raw;
+      }
+    },
+    [lang],
+  );
+
   const handleGoogleSignInRestore = useCallback(async () => {
     setIsRegistering(true);
     setRegError(null);
@@ -607,17 +636,11 @@ export default function App() {
         );
       }
     } catch (err) {
-      const raw = err instanceof Error ? err.message : 'Unable to sign in with Google.';
-      try {
-        const parsed = JSON.parse(raw) as { error?: string };
-        setRegError(parsed?.error || raw);
-      } catch {
-        setRegError(raw);
-      }
+      setRegError(formatAuthActionError(err));
     } finally {
       setIsRegistering(false);
     }
-  }, [lang]);
+  }, [formatAuthActionError, lang]);
 
   const handleGoogleSignOut = useCallback(async () => {
     setIsRegistering(true);
@@ -660,18 +683,12 @@ export default function App() {
         setActiveSession(session);
         setRegModalOpen(false);
       } catch (err) {
-        const raw = err instanceof Error ? err.message : 'Unable to register player.';
-        try {
-          const parsed = JSON.parse(raw) as { error?: string };
-          setRegError(parsed?.error || raw);
-        } catch {
-          setRegError(raw);
-        }
+        setRegError(formatAuthActionError(err));
       } finally {
         setIsRegistering(false);
       }
     },
-    [onlinePlayers],
+    [formatAuthActionError, onlinePlayers],
   );
 
   const handleLocalRegister = useCallback(
