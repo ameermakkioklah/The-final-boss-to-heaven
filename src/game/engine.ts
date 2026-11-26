@@ -1257,6 +1257,7 @@ export class PixelBattleEngine {
         this.callbacks.onBattleEnd({
           winner,
           durationSec: Math.max(1, Math.round(this.battleElapsed)),
+          durationMs: Math.max(1000, Math.round(this.battleElapsed * 1000)),
           damageDealt: this.damageDealt,
           damageTaken: this.damageTaken,
           totalHealed: this.totalHealed,

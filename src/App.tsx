@@ -1,19 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, signInWithPopup, type User } from 'firebase/auth';
 import {
   ArrowLeft,
   ArrowLeftRight,
   ArrowRight,
   ArrowUp,
+  Code2,
+  Globe,
   Maximize2,
   Minimize2,
+  Monitor,
   Pause,
   Play,
   RotateCcw,
   Shield,
+  Trophy,
+  UserCheck,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import { CppCodePanel } from './components/CppCodePanel';
+import { LeaderboardPortal } from './components/LeaderboardPortal';
+import { PlayerRegistrationModal } from './components/PlayerRegistrationModal';
+import { auth, googleProvider } from './firebase';
 import { PixelBattleEngine } from './game/engine';
 import { sound } from './game/sound';
 import {
@@ -24,6 +33,24 @@ import {
   type HudSnapshot,
   type Language,
 } from './game/types';
+import {
+  formatDurationMs,
+  generateLocalPlayerId,
+  loadActiveSession,
+  loadLocalMatches,
+  loadLocalProfile,
+  recordLocalMatchOutcome,
+  recordOnlineMatchOutcome,
+  registerOrUpdateOnlinePlayer,
+  saveActiveSession,
+  saveLocalProfile,
+  sortLeaderboardPlayers,
+  subscribeLeaderboard,
+  subscribeRecentMatches,
+  type ActivePlayerSession,
+  type MatchRunRecord,
+  type PlayerProfileRecord,
+} from './services/leaderboard';
 
 const COPY = {
   ar: {
@@ -31,10 +58,15 @@ const COPY = {
     brand: 'ذا فاينل بوس تو هافن',
     swapBtn: 'تبديل الجانبين',
     expandBtn: 'تكبير اللعبة',
-    collapseBtn: 'عرض الكود',
+    collapseBtn: 'إظهار الترتيب',
+    boardPaneBtn: 'الترتيب المباشر',
+    codePaneBtn: 'كود C++',
+    crtBtn: 'CRT',
+    registerPlayerBtn: 'تسجيل لاعب',
     gamePaneLabel: 'لعبة HTML5 ثنائية الأبعاد',
     titleName: 'The Final Boss to Heaven',
     startBtn: 'ابدأ المعركة',
+    playingAsLabel: (name: string) => `تلعب باسم: ${name}`,
     controlsHint:
       'A/D حركة · W/Space قفز · S انقضاض · J/نقر هجوم · Q/كلك يمين صد · Shift دحرجة · E التقاط سلاح أو مهارة · H علاج',
     warriorName: 'المحارب',
@@ -78,12 +110,15 @@ const COPY = {
     resumeBtn: 'استئناف',
     restartBtn: 'إعادة المعركة',
     titleMenuBtn: 'القائمة الرئيسية',
-    warriorWins: 'فاز المحارب!',
-    dragonWins: 'فاز التنين!',
+    warriorWins: 'فاز المحارب! (انتصار)',
+    dragonWins: 'فاز التنين! (هزيمة)',
     timeStat: 'المدة',
     dealtStat: 'الضرر المُوجّه',
     critsStat: 'ضربات حرجة',
     parriesStat: 'صد مثالي',
+    recordedOnlineTag: 'تم تسجيل النتيجة في الترتيب العالمي المباشر',
+    recordedLocalTag: 'تم حفظ النتيجة محلياً لهذه الجلسة',
+    syncResultOnlineBtn: 'سجّل بحساب Google لحفظ نقاطك عالمياً',
     playAgain: 'العب مجدداً',
     readyLog: 'اضرب التنين عن قرب، صدّ هجومه بـ Q، لديك 5 علاجات فقط طوال المعركة!',
     warriorAttacksLog: (hp: number, dmg: number, crit: boolean) =>
@@ -109,10 +144,15 @@ const COPY = {
     brand: 'THE FINAL BOSS TO HEAVEN',
     swapBtn: 'Swap Sides',
     expandBtn: 'Expand Game',
-    collapseBtn: 'Show C++ Code',
+    collapseBtn: 'Show Sidebar',
+    boardPaneBtn: 'Live Board',
+    codePaneBtn: 'C++ Code',
+    crtBtn: 'CRT',
+    registerPlayerBtn: 'Register Name',
     gamePaneLabel: 'HTML5 2D Pixel Game',
     titleName: 'The Final Boss to Heaven',
     startBtn: 'Start Battle',
+    playingAsLabel: (name: string) => `Playing as: ${name}`,
     controlsHint:
       'A/D Move · W/Space Jump · S Dive Slam · J/Click Combo · Q/Right-Click Parry · Shift Roll · E Pickup · H Heal',
     warriorName: 'Warrior',
@@ -156,12 +196,15 @@ const COPY = {
     resumeBtn: 'Resume',
     restartBtn: 'Restart Battle',
     titleMenuBtn: 'Title Screen',
-    warriorWins: 'Warrior Wins!',
-    dragonWins: 'Dragon Wins!',
+    warriorWins: 'Warrior Wins! (Victory)',
+    dragonWins: 'Dragon Wins! (Defeat)',
     timeStat: 'Time',
     dealtStat: 'Damage Dealt',
     critsStat: 'Critical Hits',
     parriesStat: 'Perfect Parries',
+    recordedOnlineTag: 'Synced to Live Global Leaderboard',
+    recordedLocalTag: 'Recorded in Local Session Feed',
+    syncResultOnlineBtn: 'Sign in with Google to Sync Globally',
     playAgain: 'Play Again',
     readyLog: 'Strike close-range, parry with Q — only 5 healing charges for the whole fight!',
     warriorAttacksLog: (hp: number, dmg: number, crit: boolean) =>
@@ -274,11 +317,33 @@ export default function App() {
   const gameStageRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<PixelBattleEngine | null>(null);
 
-  const [lang, setLang] = useState<Language>('ar');
+  const [lang, setLang] = useState<Language>('en');
   const [muted, setMuted] = useState(false);
+  const [crtEnabled, setCrtEnabled] = useState(true);
   const [expandedGame, setExpandedGame] = useState(false);
   const [swapSides, setSwapSides] = useState(false);
+  const [sidePanel, setSidePanel] = useState<'leaderboard' | 'code'>('leaderboard');
   const [gameState, setGameState] = useState<GameState>('TITLE');
+
+  // Player Identity & Online Sync State
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [activeSession, setActiveSession] = useState<ActivePlayerSession | null>(() =>
+    loadActiveSession(),
+  );
+  const [regModalOpen, setRegModalOpen] = useState<boolean>(() => !loadActiveSession());
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [regError, setRegError] = useState<string | null>(null);
+
+  // Live Firestore Leaderboard & Local Session State
+  const [onlinePlayers, setOnlinePlayers] = useState<PlayerProfileRecord[]>([]);
+  const [onlineMatches, setOnlineMatches] = useState<MatchRunRecord[]>([]);
+  const [localProfile, setLocalProfile] = useState<PlayerProfileRecord | null>(() =>
+    loadLocalProfile(),
+  );
+  const [localMatches, setLocalMatches] = useState<MatchRunRecord[]>(() => loadLocalMatches());
+  const [boardLoading, setBoardLoading] = useState(true);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [isSubmittingMatch, setIsSubmittingMatch] = useState(false);
 
   const [hud, setHud] = useState<HudSnapshot>({
     warriorHp: BATTLE_CONFIG.warriorBaseHp,
@@ -314,6 +379,7 @@ export default function App() {
   const [summary, setSummary] = useState<BattleSummary>({
     winner: null,
     durationSec: 0,
+    durationMs: 0,
     damageDealt: 0,
     damageTaken: 0,
     totalHealed: 0,
@@ -324,6 +390,145 @@ export default function App() {
 
   const t = COPY[lang];
 
+  // Subscribe to Firebase Auth state
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+    });
+    return () => unsub();
+  }, []);
+
+  // Subscribe to real-time Firestore Leaderboard & Recent Matches Feed
+  useEffect(() => {
+    let playersReady = false;
+    let matchesReady = false;
+    const markReady = () => {
+      if (playersReady && matchesReady) setBoardLoading(false);
+    };
+
+    const unsubPlayers = subscribeLeaderboard(
+      (players) => {
+        setOnlinePlayers(players);
+        setSyncError(null);
+        playersReady = true;
+        markReady();
+      },
+      (err) => {
+        try {
+          const parsed = JSON.parse(err.message) as { error?: string };
+          setSyncError(parsed?.error || err.message);
+        } catch {
+          setSyncError(err.message);
+        }
+        playersReady = true;
+        markReady();
+      },
+    );
+
+    const unsubMatches = subscribeRecentMatches(
+      (matches) => {
+        setOnlineMatches(matches);
+        setSyncError(null);
+        matchesReady = true;
+        markReady();
+      },
+      (err) => {
+        try {
+          const parsed = JSON.parse(err.message) as { error?: string };
+          setSyncError(parsed?.error || err.message);
+        } catch {
+          setSyncError(err.message);
+        }
+        matchesReady = true;
+        markReady();
+      },
+    );
+
+    return () => {
+      unsubPlayers();
+      unsubMatches();
+    };
+  }, []);
+
+  // Reconcile signed-in user's existing Firestore profile into activeSession
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const matched = onlinePlayers.find((p) => p.uid === firebaseUser.uid);
+    if (matched) {
+      setActiveSession((prev) => {
+        if (
+          prev &&
+          prev.mode === 'online' &&
+          prev.playerId === matched.uid &&
+          prev.playerName === matched.playerName
+        ) {
+          return prev;
+        }
+        const next: ActivePlayerSession = {
+          playerId: matched.uid,
+          playerName: matched.playerName,
+          mode: 'online',
+        };
+        saveActiveSession(next);
+        return next;
+      });
+      setRegModalOpen(false);
+    }
+  }, [firebaseUser, onlinePlayers]);
+
+  // Combined Leaderboard & Feed (includes local session record clearly tagged when in local mode)
+  const displayedPlayers = useMemo(() => {
+    if (activeSession?.mode === 'local' && localProfile && localProfile.uid === activeSession.playerId) {
+      const merged = [localProfile, ...onlinePlayers.filter((p) => p.uid !== localProfile.uid)];
+      return sortLeaderboardPlayers(merged);
+    }
+    return onlinePlayers;
+  }, [activeSession, localProfile, onlinePlayers]);
+
+  const displayedMatches = useMemo(() => {
+    if (activeSession?.mode === 'local' && localMatches.length > 0) {
+      return [...localMatches, ...onlineMatches]
+        .sort((a, b) => b.createdAtMs - a.createdAtMs)
+        .slice(0, 30);
+    }
+    return onlineMatches;
+  }, [activeSession, localMatches, onlineMatches]);
+
+  // Keep latest match-recording handler in a ref so the canvas engine callback never sees stale state
+  const handleBattleEndRef = useRef<(battleSummary: BattleSummary) => void>(() => {});
+  handleBattleEndRef.current = (battleSummary: BattleSummary) => {
+    setSummary(battleSummary);
+    setGameState('GAME_OVER');
+
+    if (!activeSession || !battleSummary.winner) return;
+
+    if (activeSession.mode === 'online' && auth.currentUser) {
+      setIsSubmittingMatch(true);
+      setSyncError(null);
+      void recordOnlineMatchOutcome({
+        uid: auth.currentUser.uid,
+        playerName: activeSession.playerName,
+        summary: battleSummary,
+      })
+        .catch((err) => {
+          const raw = err instanceof Error ? err.message : 'Failed to sync match result.';
+          try {
+            const parsed = JSON.parse(raw) as { error?: string };
+            setSyncError(parsed?.error || raw);
+          } catch {
+            setSyncError(raw);
+          }
+        })
+        .finally(() => {
+          setIsSubmittingMatch(false);
+        });
+    } else {
+      const updated = recordLocalMatchOutcome(activeSession, battleSummary);
+      setLocalProfile(updated.profile);
+      setLocalMatches(updated.matches);
+    }
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -332,8 +537,7 @@ export default function App() {
         setHud(snapshot);
       },
       onBattleEnd: (battleSummary) => {
-        setSummary(battleSummary);
-        setGameState('GAME_OVER');
+        handleBattleEndRef.current(battleSummary);
       },
     });
     engineRef.current = engine;
@@ -351,6 +555,87 @@ export default function App() {
     engine.setPaused(gameState === 'PAUSED');
   }, [gameState]);
 
+  const handleOnlineRegister = useCallback(
+    async (cleanedName: string) => {
+      setIsRegistering(true);
+      setRegError(null);
+      try {
+        let user = auth.currentUser;
+        if (!user) {
+          const cred = await signInWithPopup(auth, googleProvider);
+          user = cred.user;
+        }
+        const savedName = await registerOrUpdateOnlinePlayer(
+          user.uid,
+          cleanedName,
+          onlinePlayers,
+        );
+        const session: ActivePlayerSession = {
+          playerId: user.uid,
+          playerName: savedName,
+          mode: 'online',
+        };
+        saveActiveSession(session);
+        setActiveSession(session);
+        setRegModalOpen(false);
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : 'Unable to register player.';
+        try {
+          const parsed = JSON.parse(raw) as { error?: string };
+          setRegError(parsed?.error || raw);
+        } catch {
+          setRegError(raw);
+        }
+      } finally {
+        setIsRegistering(false);
+      }
+    },
+    [onlinePlayers],
+  );
+
+  const handleLocalRegister = useCallback(
+    (cleanedName: string) => {
+      const existingId =
+        activeSession?.mode === 'local' ? activeSession.playerId : generateLocalPlayerId();
+      const session: ActivePlayerSession = {
+        playerId: existingId,
+        playerName: cleanedName,
+        mode: 'local',
+      };
+      const now = Date.now();
+      const currentLocal =
+        localProfile && localProfile.uid === existingId
+          ? {
+              ...localProfile,
+              playerName: cleanedName,
+              playerNameLower: cleanedName.toLowerCase(),
+              updatedAtMs: now,
+            }
+          : {
+              uid: existingId,
+              playerName: cleanedName,
+              playerNameLower: cleanedName.toLowerCase(),
+              dragonKills: 0,
+              matchesPlayed: 0,
+              wins: 0,
+              losses: 0,
+              bestTimeMs: null,
+              lastOutcome: 'none' as const,
+              lastDurationMs: 0,
+              createdAtMs: now,
+              updatedAtMs: now,
+              isLocal: true,
+            };
+      saveActiveSession(session);
+      saveLocalProfile(currentLocal);
+      setActiveSession(session);
+      setLocalProfile(currentLocal);
+      setRegError(null);
+      setRegModalOpen(false);
+    },
+    [activeSession, localProfile],
+  );
+
   const toggleMute = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
@@ -366,11 +651,16 @@ export default function App() {
   }, []);
 
   const startNewBattle = useCallback(() => {
+    if (!activeSession) {
+      setRegModalOpen(true);
+      return;
+    }
     sound.playUiTick();
     engineRef.current?.resetBattle();
     setSummary({
       winner: null,
       durationSec: 0,
+      durationMs: 0,
       damageDealt: 0,
       damageTaken: 0,
       totalHealed: 0,
@@ -382,7 +672,7 @@ export default function App() {
     window.requestAnimationFrame(() => {
       gameStageRef.current?.focus({ preventScroll: true });
     });
-  }, []);
+  }, [activeSession]);
 
   const returnToTitle = useCallback(() => {
     sound.playUiTick();
@@ -390,6 +680,7 @@ export default function App() {
     setSummary({
       winner: null,
       durationSec: 0,
+      durationMs: 0,
       damageDealt: 0,
       damageTaken: 0,
       totalHealed: 0,
@@ -400,9 +691,18 @@ export default function App() {
     setGameState('TITLE');
   }, []);
 
-  // Physical e.code controls (works identically on Arabic & English keyboard layouts)
+  // Physical e.code controls (guarded when registration modal or text input is active)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (regModalOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+
       const code = e.code;
 
       if (code === 'KeyM') {
@@ -492,7 +792,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [gameState, startNewBattle, toggleMute]);
+  }, [gameState, regModalOpen, startNewBattle, toggleMute]);
 
   const warriorBarPct = Math.min(100, Math.round((hud.warriorHp / Math.max(1, hud.warriorMaxHp)) * 100));
   const dragonBarPct = Math.min(100, Math.round((hud.dragonHp / Math.max(1, hud.dragonMaxHp)) * 100));
@@ -503,39 +803,97 @@ export default function App() {
   return (
     <div
       dir={t.dir}
-      className="h-screen w-screen flex flex-col overflow-hidden bg-[#0d0b14] text-[#f4efe6] select-none"
+      className="min-h-screen lg:h-screen w-full flex flex-col lg:overflow-hidden bg-[#0d0b14] text-[#f4efe6] select-none"
     >
-      {/* Compact Top Workspace Header */}
-      <header className="h-12 px-4 border-b border-[#2a223b] bg-[#13101d] flex items-center justify-between gap-4 shrink-0">
-        <span className="font-pixel text-sm sm:text-base font-bold tracking-wide text-amber-300 whitespace-nowrap shrink-0">
-          {t.brand}
-        </span>
+      {/* Top Portal Header */}
+      <header className="min-h-12 px-3 sm:px-4 py-1.5 border-b border-[#2a223b] bg-[#13101d] flex flex-wrap items-center justify-between gap-2 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="font-pixel text-xs sm:text-base font-bold tracking-wide text-amber-300 truncate">
+            {t.brand}
+          </span>
+        </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-end">
+          {/* Active Player Identity Trigger */}
+          <button
+            type="button"
+            onClick={() => {
+              setRegError(null);
+              setRegModalOpen(true);
+            }}
+            className="h-8 px-2.5 border border-[#594b78] bg-[#1e1730] hover:border-amber-400 text-xs font-bold text-[#f4efe6] flex items-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
+          >
+            {activeSession?.mode === 'online' ? (
+              <Globe className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+            ) : (
+              <UserCheck className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+            )}
+            <span className="max-w-[115px] truncate">
+              {activeSession ? activeSession.playerName : t.registerPlayerBtn}
+            </span>
+          </button>
+
           {!expandedGame && (
-            <button
-              type="button"
-              onClick={() => setSwapSides((prev) => !prev)}
-              className="hidden lg:flex h-8 px-3 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-medium text-[#e8e0f5] rounded items-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
-            >
-              <ArrowLeftRight className="w-3.5 h-3.5" />
-              <span>{t.swapBtn}</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  setSidePanel((prev) => (prev === 'leaderboard' ? 'code' : 'leaderboard'))
+                }
+                className="h-8 px-2.5 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-medium text-[#e8e0f5] flex items-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
+              >
+                {sidePanel === 'leaderboard' ? (
+                  <>
+                    <Code2 className="w-3.5 h-3.5 text-sky-300" />
+                    <span className="hidden sm:inline">{t.codePaneBtn}</span>
+                  </>
+                ) : (
+                  <>
+                    <Trophy className="w-3.5 h-3.5 text-amber-300" />
+                    <span className="hidden sm:inline">{t.boardPaneBtn}</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSwapSides((prev) => !prev)}
+                className="hidden lg:flex h-8 px-2.5 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-medium text-[#e8e0f5] items-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+                <span>{t.swapBtn}</span>
+              </button>
+            </>
           )}
 
           <button
             type="button"
             onClick={() => setExpandedGame((prev) => !prev)}
-            className="h-8 px-3 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-medium text-[#e8e0f5] rounded flex items-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
+            className="h-8 px-2.5 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-medium text-[#e8e0f5] flex items-center gap-1.5 transition-colors duration-150 cursor-pointer whitespace-nowrap"
           >
             {expandedGame ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            <span>{expandedGame ? t.collapseBtn : t.expandBtn}</span>
+            <span className="hidden md:inline">{expandedGame ? t.collapseBtn : t.expandBtn}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCrtEnabled((prev) => !prev)}
+            aria-pressed={crtEnabled}
+            title="Toggle retro CRT scanlines"
+            className={`h-8 px-2 border text-[11px] font-mono-num flex items-center gap-1 transition-colors duration-150 cursor-pointer whitespace-nowrap ${
+              crtEnabled
+                ? 'border-amber-400/70 bg-[#261c36] text-amber-200'
+                : 'border-[#473d61] bg-[#1d172c] text-[#9e92b5]'
+            }`}
+          >
+            <Monitor className="w-3 h-3" />
+            <span>{t.crtBtn}</span>
           </button>
 
           <button
             type="button"
             onClick={toggleLang}
-            className="h-8 px-2.5 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-pixel text-[#f4efe6] rounded transition-colors duration-150 cursor-pointer whitespace-nowrap"
+            className="h-8 px-2.5 border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-xs font-pixel text-[#f4efe6] transition-colors duration-150 cursor-pointer whitespace-nowrap"
           >
             {lang === 'ar' ? 'EN' : 'عربي'}
           </button>
@@ -544,33 +902,26 @@ export default function App() {
             type="button"
             onClick={toggleMute}
             aria-label={t.muteAria}
-            className="h-8 w-8 flex items-center justify-center border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-[#f4efe6] rounded transition-colors duration-150 cursor-pointer"
+            className="h-8 w-8 flex items-center justify-center border border-[#473d61] bg-[#1d172c] hover:border-amber-400 text-[#f4efe6] transition-colors duration-150 cursor-pointer"
           >
             {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
           </button>
         </div>
       </header>
 
-      {/* Main Split-Screen Workspace */}
+      {/* Main Responsive Portal Grid */}
       <main
-        className={`flex-1 min-h-0 p-3 sm:p-4 grid gap-3 sm:gap-4 items-stretch ${
+        className={`flex-1 min-h-0 p-2.5 sm:p-4 grid gap-3 sm:gap-4 items-stretch ${
           expandedGame
             ? 'grid-cols-1'
-            : 'grid-cols-1 grid-rows-[minmax(280px,42%)_1fr] lg:grid-rows-1 lg:grid-cols-2'
+            : 'grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(330px,1fr)]'
         }`}
       >
-        {/* Clean C++ Source Panel */}
-        {!expandedGame && (
-          <div className={`min-h-0 h-full ${swapSides ? 'lg:order-2' : 'lg:order-1'}`}>
-            <CppCodePanel lang={lang} lastEvent={hud.lastEvent} winner={activeWinner} />
-          </div>
-        )}
-
-        {/* Interactive HTML5 2D Pixel Game Panel */}
+        {/* Interactive HTML5 2D Pixel Game Arena */}
         <section
           aria-label={t.gamePaneLabel}
-          className={`relative min-h-0 h-full flex flex-col border border-[#352c4a] rounded-lg overflow-hidden bg-[#0d0b14] ${
-            !expandedGame && swapSides ? 'lg:order-1' : 'lg:order-2'
+          className={`relative min-h-[340px] sm:min-h-[430px] lg:min-h-0 h-full flex flex-col border-2 border-[#352c4a] overflow-hidden bg-[#0d0b14] pixel-frame ${
+            !expandedGame && swapSides ? 'lg:order-2' : 'lg:order-1'
           }`}
         >
           {/* Isolated 60Hz Fixed-Timestep Pixel-Art Arena */}
@@ -601,10 +952,24 @@ export default function App() {
               aria-label="Warrior vs Dragon pixel battle arena"
             />
 
+            {/* Optional Subtle Retro CRT Scanlines */}
+            {crtEnabled && (
+              <div
+                aria-hidden="true"
+                className="retro-scanlines absolute inset-0 z-[5] pointer-events-none opacity-45"
+              />
+            )}
+
             {/* TITLE SCREEN OVERLAY */}
             {gameState === 'TITLE' && (
               <div className="absolute inset-0 z-20 flex flex-col justify-between p-4 sm:p-6 bg-gradient-to-b from-[#18282e]/84 via-[#1c3238]/32 to-[#18171c]/88">
-                <div />
+                <div className="flex justify-center">
+                  {activeSession && (
+                    <div className="px-3 py-1 border border-[#4f426e] bg-[#141020]/90 text-xs font-mono-num text-amber-200">
+                      {t.playingAsLabel(activeSession.playerName)}
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex flex-col items-center text-center max-w-lg mx-auto px-3">
                   <TitleCrestSvg />
@@ -674,7 +1039,7 @@ export default function App() {
                       <div className="flex items-center gap-1.5 min-w-0">
                         <WarriorPixelIcon />
                         <span className="font-bold text-xs text-[#f4efe6] truncate">
-                          {t.warriorName}
+                          {activeSession?.playerName || t.warriorName}
                         </span>
                       </div>
                       <span
@@ -1071,7 +1436,7 @@ export default function App() {
 
             {/* VICTORY / GAME OVER MODAL */}
             {gameState === 'GAME_OVER' && (
-              <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#09070f]/82 p-4">
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#09070f]/84 p-4">
                 <div className="w-full max-w-sm bg-[#181326] border-2 border-[#6a5a91] p-5 pixel-frame text-center">
                   <div className="flex justify-center mb-2">
                     {summary.winner === 'warrior' ? (
@@ -1082,18 +1447,25 @@ export default function App() {
                   </div>
 
                   <h2
-                    className={`font-pixel text-xl sm:text-2xl font-bold ${
+                    className={`font-pixel text-lg sm:text-xl font-bold ${
                       summary.winner === 'warrior' ? 'text-emerald-300' : 'text-rose-400'
                     }`}
                   >
                     {summary.winner === 'warrior' ? t.warriorWins : t.dragonWins}
                   </h2>
 
+                  {activeSession && (
+                    <p className="mt-1 text-[11px] font-mono-num text-[#cbbfe0]">
+                      {activeSession.playerName} ·{' '}
+                      {activeSession.mode === 'online' ? t.recordedOnlineTag : t.recordedLocalTag}
+                    </p>
+                  )}
+
                   <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
                     <div className="bg-[#110d1b] border border-[#3a3152] px-2.5 py-1.5">
                       <div className="text-[#9e92b5]">{t.timeStat}</div>
                       <div className="font-mono-num text-base font-bold text-[#f4efe6]">
-                        {summary.durationSec}s
+                        {formatDurationMs(summary.durationMs || summary.durationSec * 1000)}
                       </div>
                     </div>
                     <div className="bg-[#110d1b] border border-[#3a3152] px-2.5 py-1.5">
@@ -1116,7 +1488,21 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="mt-5 flex flex-col sm:flex-row gap-2.5 justify-center">
+                  {activeSession?.mode === 'local' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRegError(null);
+                        setRegModalOpen(true);
+                      }}
+                      className="mt-3 w-full h-9 px-3 border border-amber-400/70 bg-[#2a1d18] hover:bg-[#38251e] text-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Globe className="w-3.5 h-3.5 text-amber-300" />
+                      <span>{t.syncResultOnlineBtn}</span>
+                    </button>
+                  )}
+
+                  <div className="mt-4 flex flex-col sm:flex-row gap-2.5 justify-center">
                     <button
                       type="button"
                       onClick={startNewBattle}
@@ -1139,7 +1525,54 @@ export default function App() {
             )}
           </div>
         </section>
+
+        {/* Live Leaderboard & Battle Feed OR C++ Source Panel */}
+        {!expandedGame && (
+          <div
+            className={`min-h-[380px] lg:min-h-0 h-full ${
+              swapSides ? 'lg:order-1' : 'lg:order-2'
+            }`}
+          >
+            {sidePanel === 'leaderboard' ? (
+              <LeaderboardPortal
+                lang={lang}
+                activeSession={activeSession}
+                players={displayedPlayers}
+                recentMatches={displayedMatches}
+                loading={boardLoading}
+                syncError={syncError}
+                isSubmittingMatch={isSubmittingMatch}
+                onOpenRegistration={() => {
+                  setRegError(null);
+                  setRegModalOpen(true);
+                }}
+                onUpgradeToOnline={() => {
+                  setRegError(null);
+                  setRegModalOpen(true);
+                }}
+              />
+            ) : (
+              <CppCodePanel lang={lang} lastEvent={hud.lastEvent} winner={activeWinner} />
+            )}
+          </div>
+        )}
       </main>
+
+      {/* Player Registration / Callsign Gate Modal */}
+      <PlayerRegistrationModal
+        open={regModalOpen}
+        lang={lang}
+        initialName={activeSession?.playerName || ''}
+        isGoogleSignedIn={Boolean(firebaseUser)}
+        currentUid={firebaseUser?.uid || null}
+        existingPlayers={onlinePlayers}
+        canDismiss={Boolean(activeSession)}
+        isSubmitting={isRegistering}
+        submitError={regError}
+        onSubmitOnline={handleOnlineRegister}
+        onSubmitLocal={handleLocalRegister}
+        onClose={() => setRegModalOpen(false)}
+      />
     </div>
   );
 }

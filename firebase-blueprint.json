@@ -1,0 +1,160 @@
+{
+  "entities": {
+    "PlayerProfile": {
+      "title": "PlayerProfile",
+      "description": "Public non-PII combat profile and leaderboard stats for a registered player.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the player."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 20,
+          "pattern": "^[^<>&\"'/\\\\{}\\[\\]\\r\\n\\t]+$",
+          "description": "Display callsign chosen by the player."
+        },
+        "playerNameLower": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 20,
+          "description": "Lowercase normalized display name for duplicate checking."
+        },
+        "dragonKills": {
+          "type": "integer",
+          "description": "Total number of times this player has killed the Dragon."
+        },
+        "matchesPlayed": {
+          "type": "integer",
+          "description": "Total completed matches (wins + losses)."
+        },
+        "wins": {
+          "type": "integer",
+          "description": "Total victories against the Dragon."
+        },
+        "losses": {
+          "type": "integer",
+          "description": "Total defeats by the Dragon."
+        },
+        "bestTimeMs": {
+          "type": "integer",
+          "description": "Fastest Dragon kill duration in milliseconds, or null if zero kills."
+        },
+        "lastOutcome": {
+          "type": "string",
+          "enum": ["none", "win", "loss"],
+          "description": "Outcome of the player's most recent completed match."
+        },
+        "lastDurationMs": {
+          "type": "integer",
+          "description": "Duration in milliseconds of the player's most recent completed match."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the player profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest profile or match update."
+        }
+      },
+      "required": [
+        "uid",
+        "playerName",
+        "playerNameLower",
+        "dragonKills",
+        "matchesPlayed",
+        "wins",
+        "losses",
+        "bestTimeMs",
+        "lastOutcome",
+        "lastDurationMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MatchRun": {
+      "title": "MatchRun",
+      "description": "Immutable completed boss fight outcome record for the live battle feed.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the player who completed the run."
+        },
+        "playerName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 20,
+          "pattern": "^[^<>&\"'/\\\\{}\\[\\]\\r\\n\\t]+$",
+          "description": "Player display name at the time of the match."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["win", "loss"],
+          "description": "Match result: win (Victory) or loss (Defeat)."
+        },
+        "dragonKilled": {
+          "type": "boolean",
+          "description": "True only when the Dragon was defeated."
+        },
+        "durationMs": {
+          "type": "integer",
+          "description": "Total battle duration in milliseconds."
+        },
+        "damageDealt": {
+          "type": "integer",
+          "description": "Total damage inflicted by the warrior."
+        },
+        "critsLanded": {
+          "type": "integer",
+          "description": "Critical hits landed during the run."
+        },
+        "parriesLanded": {
+          "type": "integer",
+          "description": "Perfect parries landed during the run."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the match ended."
+        }
+      },
+      "required": [
+        "uid",
+        "playerName",
+        "outcome",
+        "dragonKilled",
+        "durationMs",
+        "damageDealt",
+        "critsLanded",
+        "parriesLanded",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/players/{playerId}": {
+      "schema": {
+        "$ref": "#/entities/PlayerProfile"
+      },
+      "description": "Public non-PII player profiles and leaderboard rankings keyed by player UID."
+    },
+    "/matches/{matchId}": {
+      "schema": {
+        "$ref": "#/entities/MatchRun"
+      },
+      "description": "Immutable recent Dragon boss fight outcomes for real-time feed visibility."
+    }
+  }
+}

@@ -100,6 +100,7 @@ export interface HudSnapshot {
 export interface BattleSummary {
   winner: Winner;
   durationSec: number;
+  durationMs: number;
   damageDealt: number;
   damageTaken: number;
   totalHealed: number;
