@@ -102,7 +102,7 @@ export function PlayerRegistrationModal({
 
   const t = MODAL_COPY[lang];
   const validation = validatePlayerName(nameInput, existingPlayers, currentUid);
-  const cleanedLength = sanitizePlayerName(nameInput).length;
+  const cleanedLength = Array.from(sanitizePlayerName(nameInput)).length;
   const validationMessage = touched
     ? lang === 'ar'
       ? validation.errorAr

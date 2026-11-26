@@ -75,10 +75,7 @@ service cloud.firestore {
         && data.uid.matches('^[a-zA-Z0-9_\\-]+$')
         && data.uid == request.auth.uid
         && isValidPlayerName(data.playerName)
-        && data.playerNameLower is string
-        && data.playerNameLower.size() >= 2
-        && data.playerNameLower.size() <= 20
-        && data.playerNameLower == data.playerName.lower()
+        && isValidPlayerName(data.playerNameLower)
         && data.dragonKills is int
         && data.dragonKills >= 0
         && data.dragonKills <= 1000000

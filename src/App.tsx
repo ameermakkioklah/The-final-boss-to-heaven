@@ -26,6 +26,7 @@ import { PlayerRegistrationModal } from './components/PlayerRegistrationModal';
 import { auth, googleProvider } from './firebase';
 import type { DialogueCue } from './game/cutscene';
 import { PixelBattleEngine } from './game/engine';
+import { bossMusic } from './game/music';
 import { sound } from './game/sound';
 import {
   BATTLE_CONFIG,
@@ -401,15 +402,18 @@ export default function App() {
 
   const t = COPY[lang];
 
+  // Guard against onAuthStateChanged / reconciliation racing with manual callsign submission
+  const isManualAuthFlowRef = useRef(false);
+
   // Subscribe to Firebase Auth state & auto-restore existing Firestore player profile
   useEffect(() => {
     let active = true;
     const unsub = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
-      if (!user) return;
+      if (!user || isManualAuthFlowRef.current) return;
       void fetchOnlinePlayerProfile(user.uid)
         .then((profile) => {
-          if (!active || !profile) return;
+          if (!active || !profile || isManualAuthFlowRef.current) return;
           const restored: ActivePlayerSession = {
             playerId: profile.uid,
             playerName: profile.playerName,
@@ -485,7 +489,7 @@ export default function App() {
 
   // Reconcile signed-in user's existing Firestore profile into activeSession
   useEffect(() => {
-    if (!firebaseUser) return;
+    if (!firebaseUser || isManualAuthFlowRef.current) return;
     const matched = onlinePlayers.find((p) => p.uid === firebaseUser.uid);
     if (matched) {
       setActiveSession((prev) => {
@@ -584,6 +588,7 @@ export default function App() {
     cutsceneVoice.preloadCutsceneVoices();
     return () => {
       cutsceneVoice.stopSpeech();
+      bossMusic.stop();
       engine.stop();
       engineRef.current = null;
     };
@@ -597,7 +602,42 @@ export default function App() {
     if (gameState !== 'PLAYING') {
       cutsceneVoice.stopSpeech();
     }
+    if (gameState === 'PAUSED') {
+      bossMusic.setPaused(true);
+    } else if (gameState === 'PLAYING') {
+      bossMusic.setPaused(false);
+    } else {
+      bossMusic.stop();
+    }
   }, [gameState]);
+
+  useEffect(() => {
+    bossMusic.setDucked(Boolean(dialogueCue));
+  }, [dialogueCue]);
+
+  useEffect(() => {
+    if (gameState !== 'PLAYING') return;
+    if (hud.cutsceneActive) {
+      const isEnding =
+        (hud.dragonHp <= 0 && !hud.dragonTransforming) || hud.warriorHp <= 0;
+      bossMusic.setIntensity(isEnding ? 'ending' : 'intro');
+    } else if (hud.lastDanceMode || hud.lastDanceCinematic) {
+      bossMusic.setIntensity('last_dance');
+    } else if (hud.dragonPhase2 || hud.dragonTransforming) {
+      bossMusic.setIntensity('phase2');
+    } else {
+      bossMusic.setIntensity('combat');
+    }
+  }, [
+    gameState,
+    hud.cutsceneActive,
+    hud.dragonHp,
+    hud.warriorHp,
+    hud.dragonTransforming,
+    hud.lastDanceMode,
+    hud.lastDanceCinematic,
+    hud.dragonPhase2,
+  ]);
 
   const formatAuthActionError = useCallback(
     (err: unknown): string => {
@@ -619,8 +659,26 @@ export default function App() {
           : 'Browser blocked the sign-in popup. Please allow popups for this site and try again.';
       }
       try {
-        const parsed = JSON.parse(raw) as { error?: string };
-        return parsed?.error || raw;
+        const parsed = JSON.parse(raw) as {
+          error?: string;
+          operationType?: string;
+          path?: string;
+          authInfo?: { userId?: string | null; emailVerified?: boolean | null };
+        };
+        if (parsed?.error) {
+          if (parsed.error.toLowerCase().includes('insufficient permissions')) {
+            const detail = [parsed.operationType, parsed.path].filter(Boolean).join(' ');
+            const verifiedHint =
+              parsed.authInfo?.emailVerified === false
+                ? lang === 'ar'
+                  ? ' (البريد الإلكتروني للحساب غير موثق)'
+                  : ' (Account email is not verified)'
+                : '';
+            return detail ? `${parsed.error} [${detail}]${verifiedHint}` : parsed.error;
+          }
+          return parsed.error;
+        }
+        return raw;
       } catch {
         return raw;
       }
@@ -628,7 +686,27 @@ export default function App() {
     [lang],
   );
 
+  const ensureVerifiedAuthToken = useCallback(
+    async (user: User): Promise<void> => {
+      try {
+        await user.reload();
+      } catch {
+        // Ignore transient reload error and proceed to token refresh
+      }
+      await user.getIdToken(true);
+      if (!user.emailVerified) {
+        throw new Error(
+          lang === 'ar'
+            ? 'حساب Google هذا غير موثّق البريد الإلكتروني. يرجى استخدام حساب Gmail موثّق للربط.'
+            : 'This Google account email is not verified. Please sign in with a verified Gmail/Google account.',
+        );
+      }
+    },
+    [lang],
+  );
+
   const handleGoogleSignInRestore = useCallback(async () => {
+    isManualAuthFlowRef.current = true;
     setIsRegistering(true);
     setRegError(null);
     setRegNotice(null);
@@ -638,6 +716,7 @@ export default function App() {
         const cred = await signInWithPopup(auth, googleProvider);
         user = cred.user;
       }
+      await ensureVerifiedAuthToken(user);
       const existing = await fetchOnlinePlayerProfile(user.uid);
       if (existing) {
         const restored: ActivePlayerSession = {
@@ -658,9 +737,10 @@ export default function App() {
     } catch (err) {
       setRegError(formatAuthActionError(err));
     } finally {
+      isManualAuthFlowRef.current = false;
       setIsRegistering(false);
     }
-  }, [formatAuthActionError, lang]);
+  }, [ensureVerifiedAuthToken, formatAuthActionError, lang]);
 
   const handleGoogleSignOut = useCallback(async () => {
     setIsRegistering(true);
@@ -680,6 +760,7 @@ export default function App() {
 
   const handleOnlineRegister = useCallback(
     async (cleanedName: string) => {
+      isManualAuthFlowRef.current = true;
       setIsRegistering(true);
       setRegError(null);
       setRegNotice(null);
@@ -689,6 +770,7 @@ export default function App() {
           const cred = await signInWithPopup(auth, googleProvider);
           user = cred.user;
         }
+        await ensureVerifiedAuthToken(user);
         const savedName = await registerOrUpdateOnlinePlayer(
           user.uid,
           cleanedName,
@@ -705,10 +787,11 @@ export default function App() {
       } catch (err) {
         setRegError(formatAuthActionError(err));
       } finally {
+        isManualAuthFlowRef.current = false;
         setIsRegistering(false);
       }
     },
-    [formatAuthActionError, onlinePlayers],
+    [ensureVerifiedAuthToken, formatAuthActionError, onlinePlayers],
   );
 
   const handleLocalRegister = useCallback(
@@ -759,6 +842,7 @@ export default function App() {
       const next = !prev;
       sound.setMuted(next);
       cutsceneVoice.setMuted(next);
+      bossMusic.setMuted(next);
       if (!next) sound.playUiTick();
       return next;
     });
@@ -779,6 +863,12 @@ export default function App() {
       setDialogueCue(null);
       cutsceneVoice.preloadCutsceneVoices();
       engineRef.current?.resetBattle(forceReplayIntro === true);
+      const initialPhase = engineRef.current?.getCutscenePhase();
+      const initialMusicMode =
+        initialPhase && initialPhase !== 'COMBAT' && initialPhase !== 'IDLE'
+          ? 'intro'
+          : 'combat';
+      bossMusic.start(initialMusicMode);
       setSummary({
         winner: null,
         durationSec: 0,
@@ -801,6 +891,7 @@ export default function App() {
   const returnToTitle = useCallback(() => {
     sound.playUiTick();
     cutsceneVoice.stopSpeech();
+    bossMusic.stop();
     setDialogueCue(null);
     engineRef.current?.setTitleMode(true);
     setSummary({

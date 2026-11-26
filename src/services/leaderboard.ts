@@ -109,7 +109,10 @@ export function validatePlayerName(
     };
   }
 
-  if (cleaned.length < BLUEPRINT_CONSTRAINTS.playerNameMinLength) {
+  const codePointLen = Array.from(cleaned).length;
+  const lowerCodePointLen = Array.from(cleaned.toLowerCase()).length;
+
+  if (codePointLen < BLUEPRINT_CONSTRAINTS.playerNameMinLength) {
     return {
       valid: false,
       cleaned,
@@ -118,7 +121,10 @@ export function validatePlayerName(
     };
   }
 
-  if (cleaned.length > BLUEPRINT_CONSTRAINTS.playerNameMaxLength) {
+  if (
+    codePointLen > BLUEPRINT_CONSTRAINTS.playerNameMaxLength ||
+    lowerCodePointLen > BLUEPRINT_CONSTRAINTS.playerNameMaxLength
+  ) {
     return {
       valid: false,
       cleaned,
